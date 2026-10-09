@@ -1,0 +1,16 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Kum saati -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M38,30h32v6c0,8 -6,13 -11,18c5,5 11,10 11,18v6H38v-6c0,-8 6,-13 11,-18c-5,-5 -11,-10 -11,-18z" />
+    <path
+        android:fillColor="#F2A541"
+        android:pathData="M44,72c0,-5 5,-9 10,-13c5,4 10,8 10,13z" />
+    <path
+        android:fillColor="#F2A541"
+        android:pathData="M47,40h14c-1,4 -4,6 -7,9c-3,-3 -6,-5 -7,-9z" />
+</vector>
