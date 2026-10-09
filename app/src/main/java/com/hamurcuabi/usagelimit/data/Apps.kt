@@ -45,6 +45,10 @@ object Apps {
         pkg
     }
 
-    fun isLaunchable(context: Context, pkg: String): Boolean =
-        context.packageManager.getLaunchIntentForPackage(pkg) != null
+    /** Uygulama çekmecesinde görünen (başlatılabilir) tüm paketler. */
+    fun launchable(context: Context): Set<String> {
+        val launcher = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+        return context.packageManager.queryIntentActivities(launcher, 0)
+            .mapTo(HashSet()) { it.activityInfo.packageName }
+    }
 }

@@ -30,11 +30,38 @@ class LimitStore(context: Context) {
         editor.apply()
     }
 
-    /** Geçerli günlük limit (dakika); sınırsızsa null. */
-    fun limitMinutes(pkg: String, defaultExempt: Set<String>): Int? {
+    /** Grubun (kategorinin) günlük toplam limiti; yoksa null. */
+    fun groupLimit(category: String): Int? {
+        val key = GROUP_PREFIX + category
+        return if (prefs.contains(key)) prefs.getInt(key, 0).takeIf { it > 0 } else null
+    }
+
+    fun setGroupLimit(category: String, minutes: Int?) {
+        val key = GROUP_PREFIX + category
+        val editor = prefs.edit()
+        if (minutes == null) editor.remove(key) else editor.putInt(key, minutes.coerceIn(MIN_LIMIT, MAX_LIMIT))
+        editor.apply()
+    }
+
+    /** Hiçbir limite (uygulama veya grup) tabi olmayan uygulama mı? */
+    fun isUnlimited(pkg: String, defaultExempt: Set<String>): Boolean {
+        val rule = rule(pkg)
+        return if (rule == null) pkg in defaultExempt else rule <= 0
+    }
+
+    /**
+     * Uygulamanın kendi günlük limiti (dakika); yoksa null.
+     * Özel kural yoksa: grubun toplam limiti varsa uygulama yalnızca ona tabidir,
+     * yoksa varsayılan limit uygulanır.
+     */
+    fun limitMinutes(pkg: String, defaultExempt: Set<String>, category: String): Int? {
         val rule = rule(pkg)
         return when {
-            rule == null -> if (pkg in defaultExempt) null else defaultLimitMin
+            rule == null -> when {
+                pkg in defaultExempt -> null
+                groupLimit(category) != null -> null
+                else -> defaultLimitMin
+            }
             rule <= 0 -> null
             else -> rule
         }
@@ -67,7 +94,7 @@ class LimitStore(context: Context) {
     companion object {
         const val UNLIMITED = -1
         const val MIN_LIMIT = 5
-        const val MAX_LIMIT = 600
+        const val MAX_LIMIT = 720
         const val STEP = 5
 
         /** Limit dolunca verilen ek süre ve günde uygulama başına kaç kez alınabileceği. */
@@ -77,6 +104,7 @@ class LimitStore(context: Context) {
         private const val KEY_DEFAULT = "default_limit_min"
         private const val KEY_MONITORING = "monitoring_enabled"
         private const val RULE_PREFIX = "rule:"
+        private const val GROUP_PREFIX = "group:"
         private const val DAY_PREFIX = "d:"
     }
 }

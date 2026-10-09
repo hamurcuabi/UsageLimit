@@ -8,6 +8,7 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.content.res.ColorStateList
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.Typeface
@@ -29,6 +30,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.hamurcuabi.usagelimit.MainActivity
 import com.hamurcuabi.usagelimit.R
+import com.hamurcuabi.usagelimit.data.AppCategory
 import com.hamurcuabi.usagelimit.data.Apps
 import com.hamurcuabi.usagelimit.data.LimitStore
 import com.hamurcuabi.usagelimit.data.Permissions
@@ -48,6 +50,8 @@ class MonitorService : Service() {
     private lateinit var notifications: NotificationManager
 
     private var defaultExempt: Set<String> = emptySet()
+    private var launchable: Set<String> = emptySet()
+    private val categoryCache = HashMap<String, AppCategory>()
     private var exemptLoadedAt = 0L
 
     private var overlayView: View? = null
@@ -97,6 +101,9 @@ class MonitorService : Service() {
         super.onDestroy()
     }
 
+    private fun categoryOf(pkg: String): AppCategory =
+        categoryCache.getOrPut(pkg) { AppCategory.of(this, pkg) }
+
     private fun tick() {
         if (!powerManager.isInteractive || !Permissions.hasUsageAccess(this)) {
             hideOverlay()
@@ -106,75 +113,120 @@ class MonitorService : Service() {
         val now = System.currentTimeMillis()
         if (now - exemptLoadedAt > EXEMPT_REFRESH_MS) {
             defaultExempt = Apps.defaultExempt(this)
+            launchable = Apps.launchable(this)
             exemptLoadedAt = now
             store.pruneOtherDays(Time.dayKey(now))
         }
 
         val snapshot = UsageReader.read(this, Time.startOfDay(now), now)
         val pkg = snapshot.foreground
-        if (pkg == null || pkg == packageName) {
-            hideOverlay()
-            return
-        }
-        val limitMin = store.limitMinutes(pkg, defaultExempt)
-        if (limitMin == null) {
+        if (pkg == null || pkg == packageName || store.isUnlimited(pkg, defaultExempt)) {
             hideOverlay()
             return
         }
 
         val day = Time.dayKey(now)
+        val label = Apps.label(this, pkg)
+        val category = categoryOf(pkg)
         val usedMs = snapshot.perApp[pkg]?.totalMs ?: 0L
-        val extensions = store.extensionsUsed(pkg, day)
-        val allowedMs = (limitMin + extensions * LimitStore.EXTENSION_MIN) * Time.MINUTE_MS
 
-        if (usedMs >= allowedMs) {
-            showLimitReached(pkg, usedMs, limitMin, extensions, day)
-            return
+        // 1) Uygulamanın kendi limiti
+        val limitMin = store.limitMinutes(pkg, defaultExempt, category.name)
+        var ownAllowedMs = 0L
+        if (limitMin != null) {
+            val extensions = store.extensionsUsed(pkg, day)
+            ownAllowedMs = (limitMin + extensions * LimitStore.EXTENSION_MIN) * Time.MINUTE_MS
+            if (usedMs >= ownAllowedMs) {
+                showLimitReached(
+                    pkg = pkg,
+                    title = "$label için bugünlük süre doldu",
+                    body = "Bugün ${Time.format(usedMs)} kullandın. Günlük limitin $limitMin dk.",
+                    extensionKey = pkg,
+                    extensions = extensions,
+                    day = day,
+                )
+                return
+            }
+        }
+
+        // 2) Grubun toplam limiti
+        val groupMin = store.groupLimit(category.name)
+        val groupKey = "group:${category.name}"
+        var groupUsedMs = 0L
+        var groupAllowedMs = 0L
+        if (groupMin != null) {
+            for ((other, usage) in snapshot.perApp) {
+                if (other !in launchable || other == packageName) continue
+                if (categoryOf(other) != category || store.isUnlimited(other, defaultExempt)) continue
+                groupUsedMs += usage.totalMs
+            }
+            val extensions = store.extensionsUsed(groupKey, day)
+            groupAllowedMs = (groupMin + extensions * LimitStore.EXTENSION_MIN) * Time.MINUTE_MS
+            if (groupUsedMs >= groupAllowedMs) {
+                showLimitReached(
+                    pkg = pkg,
+                    title = "${category.title} için bugünlük süre doldu",
+                    body = "Bu gruptaki uygulamalarda bugün toplam ${Time.format(groupUsedMs)} geçirdin. Grup limiti $groupMin dk.",
+                    extensionKey = groupKey,
+                    extensions = extensions,
+                    day = day,
+                )
+                return
+            }
         }
 
         hideOverlay()
-        if (usedMs >= limitMin * Time.MINUTE_MS * 8 / 10 && !store.wasWarned(pkg, day)) {
+
+        if (limitMin != null && usedMs >= limitMin * Time.MINUTE_MS * 8 / 10 && !store.wasWarned(pkg, day)) {
             store.markWarned(pkg, day)
-            val left = Time.format(allowedMs - usedMs)
             notifyAlert(
                 id = WARN_ID_BASE + (pkg.hashCode() and 0xFFFF),
-                title = "${Apps.label(this, pkg)}: limit dolmak üzere",
-                text = "Bugün ${Time.format(usedMs)} kullandın. Kalan: $left.",
+                title = "$label: limit dolmak üzere",
+                text = "Bugün ${Time.format(usedMs)} kullandın. Kalan: ${Time.format(ownAllowedMs - usedMs)}.",
+            )
+        }
+        if (groupMin != null && groupUsedMs >= groupMin * Time.MINUTE_MS * 8 / 10 && !store.wasWarned(groupKey, day)) {
+            store.markWarned(groupKey, day)
+            notifyAlert(
+                id = WARN_ID_BASE + (groupKey.hashCode() and 0xFFFF),
+                title = "${category.title}: grup limiti dolmak üzere",
+                text = "Bugün toplam ${Time.format(groupUsedMs)}. Kalan: ${Time.format(groupAllowedMs - groupUsedMs)}.",
             )
         }
     }
 
-    private fun showLimitReached(pkg: String, usedMs: Long, limitMin: Int, extensions: Int, day: String) {
+    private fun showLimitReached(
+        pkg: String,
+        title: String,
+        body: String,
+        extensionKey: String,
+        extensions: Int,
+        day: String,
+    ) {
         if (overlayPkg == pkg && overlayView != null) return
         hideOverlay()
 
-        val label = Apps.label(this, pkg)
         if (!Settings.canDrawOverlays(this)) {
             // Üste çizme izni yoksa en azından bildirimle haber ver (dakikada en fazla bir kez).
             val now = System.currentTimeMillis()
             if (lastFallbackPkg != pkg || now - lastFallbackAt > Time.MINUTE_MS) {
                 lastFallbackPkg = pkg
                 lastFallbackAt = now
-                notifyAlert(
-                    id = LIMIT_ID_BASE + (pkg.hashCode() and 0xFFFF),
-                    title = "$label: günlük limit doldu",
-                    text = "Bugün ${Time.format(usedMs)} kullandın (limit $limitMin dk).",
-                )
+                notifyAlert(id = LIMIT_ID_BASE + (pkg.hashCode() and 0xFFFF), title = title, text = body)
             }
             return
         }
 
-        val extensionsLeft = LimitStore.MAX_EXTENSIONS - extensions
         val view = buildOverlay(
-            title = "$label için bugünlük süre doldu",
-            body = "Bugün ${Time.format(usedMs)} kullandın. Günlük limitin $limitMin dk.",
-            extensionsLeft = extensionsLeft,
+            title = title,
+            body = body,
+            extensionsLeft = LimitStore.MAX_EXTENSIONS - extensions,
             onClose = {
                 hideOverlay()
                 goHome()
             },
             onExtend = {
-                store.addExtension(pkg, day)
+                store.addExtension(extensionKey, day)
                 hideOverlay()
             },
         )
@@ -242,6 +294,8 @@ class MonitorService : Service() {
             text = "Uygulamadan çık"
             isAllCaps = false
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+            backgroundTintList = ColorStateList.valueOf(Color.rgb(242, 165, 65))
+            setTextColor(Color.rgb(26, 18, 0))
             setOnClickListener { onClose() }
         }, buttonParams)
 

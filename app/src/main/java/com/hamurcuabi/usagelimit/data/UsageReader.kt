@@ -101,8 +101,12 @@ object UsageReader {
         return UsageSnapshot(result, foreground)
     }
 
-    /** Bugünden önceki [days] günün uygulama başına günlük ortalaması (ms). */
-    fun dailyAverages(context: Context, days: Int = 7): Map<String, Long> {
+    /**
+     * Bugünden önceki [days] günün uygulama başına kullanım süreleri (ms).
+     * İlk eleman en eski gün, son eleman dündür.
+     */
+    fun dailyHistory(context: Context, days: Int = 7): List<Map<String, Long>> {
+        val result = List(days) { HashMap<String, Long>() }
         val usm = context.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
         val end = Time.startOfDay()
         val start = end - days * Time.DAY_MS
@@ -110,15 +114,18 @@ object UsageReader {
             usm.queryUsageStats(UsageStatsManager.INTERVAL_DAILY, start, end)
         } catch (_: Exception) {
             null
-        } ?: return emptyMap()
+        } ?: return result
 
-        val sums = HashMap<String, Long>()
         for (s in stats) {
-            // Bugünün (henüz bitmemiş) kovasını ortalamaya katma.
+            // Bugünün (henüz bitmemiş) kovası geçmişe katılmaz.
             if (s.firstTimeStamp >= end) continue
             if (s.totalTimeInForeground <= 0) continue
-            sums[s.packageName] = (sums[s.packageName] ?: 0L) + s.totalTimeInForeground
+            // Kovalar gece yarısına tam hizalı olmayabildiği için ortasına göre güne yerleştir.
+            val mid = (s.firstTimeStamp + minOf(s.lastTimeStamp, end)) / 2
+            val index = ((mid - start) / Time.DAY_MS).toInt().coerceIn(0, days - 1)
+            val day = result[index]
+            day[s.packageName] = (day[s.packageName] ?: 0L) + s.totalTimeInForeground
         }
-        return sums.mapValues { it.value / days }
+        return result
     }
 }
