@@ -92,6 +92,14 @@ import java.util.concurrent.ConcurrentHashMap
 
 private const val COLLAPSED_ROWS = 4
 
+/** "%12", "%3,4"; ölçüm yoksa "–". */
+private fun formatPct(value: Float): String = when {
+    value <= 0f -> "–"
+    value >= 10f -> "%" + Math.round(value)
+    value < 0.1f -> "<%0,1"
+    else -> "%" + String.format(Locale.forLanguageTag("tr"), "%.1f", value)
+}
+
 private fun AppCategory.color(): Color = when (this) {
     AppCategory.SOCIAL -> Color(0xFFE86A92)
     AppCategory.GAME -> Color(0xFF8B7CF6)
@@ -357,6 +365,13 @@ private fun HeroCard(state: UiState, groups: List<Pair<AppCategory, List<AppRow>
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            if (state.batteryTodayPct > 0f) {
+                Text(
+                    "Ekran açıkken harcanan pil: ${formatPct(state.batteryTodayPct)}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
 
             val shares = groups
                 .map { (category, rows) -> category to rows.sumOf { it.todayMs } }
@@ -737,7 +752,8 @@ private fun AppRowItem(row: AppRow, onClick: () -> Unit, modifier: Modifier = Mo
             )
             Text(
                 if (row.dailyAvgMs > 0 || row.avgSessionMs > 0) {
-                    "ort. ${Time.format(row.dailyAvgMs)}/gün · ${Time.format(row.avgSessionMs)}/açılış"
+                    "ort. ${Time.format(row.dailyAvgMs)}/gün · ${Time.format(row.avgSessionMs)}/açılış" +
+                        if (row.batteryTodayPct >= 0.1f) " · pil ${formatPct(row.batteryTodayPct)}" else ""
                 } else {
                     "Bu hafta kullanılmadı"
                 },
@@ -870,6 +886,17 @@ private fun AppDetail(
             StatTile("Açılış başına", Time.format(row.avgSessionMs), Modifier.weight(1f))
             StatTile("Bugünkü açılış", row.sessionsToday.toString(), Modifier.weight(1f))
         }
+        Spacer(Modifier.height(10.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            StatTile("Pil (bugün)", formatPct(row.batteryTodayPct), Modifier.weight(1f))
+            StatTile("Pil (7 gün)", formatPct(row.batteryWeekPct), Modifier.weight(1f))
+        }
+        Text(
+            "Pil, izleme açıkken ve uygulama ekrandayken düşen şarjdır; arka plan tüketimi dahil değildir.",
+            style = MaterialTheme.typography.bodySmall,
+            color = scheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 8.dp),
+        )
 
         Spacer(Modifier.height(24.dp))
         Text("Son 7 gün", style = MaterialTheme.typography.titleSmall)

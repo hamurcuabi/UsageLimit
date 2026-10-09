@@ -5,6 +5,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.hamurcuabi.usagelimit.data.AppCategory
 import com.hamurcuabi.usagelimit.data.Apps
+import com.hamurcuabi.usagelimit.data.BatteryStore
 import com.hamurcuabi.usagelimit.data.LimitStore
 import com.hamurcuabi.usagelimit.data.Permissions
 import com.hamurcuabi.usagelimit.data.Time
@@ -38,6 +39,9 @@ data class AppRow(
     /** Kendi limiti yok, grubunun toplam limitine tabi. */
     val groupLimited: Boolean = false,
     val exceeded: Boolean = false,
+    /** Uygulama ön plandayken düşen pil yüzdesi: bugün ve son 7 gün. */
+    val batteryTodayPct: Float = 0f,
+    val batteryWeekPct: Float = 0f,
 ) {
     val limitMs: Long? get() = limitMin?.let { it * Time.MINUTE_MS }
 }
@@ -62,6 +66,7 @@ data class UiState(
     val totalTodayMs: Long = 0,
     val avgPerAppMs: Long = 0,
     val usedAppCount: Int = 0,
+    val batteryTodayPct: Float = 0f,
     /** Son 7 günün toplamları (bugün en sonda) ve gün etiketleri. */
     val weekTotals: List<Long> = emptyList(),
     val weekLabels: List<String> = emptyList(),
@@ -71,6 +76,7 @@ data class UiState(
 
 class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val store = LimitStore(app)
+    private val batteryStore = BatteryStore(app)
     private val _state = MutableStateFlow(UiState(defaultLimitMin = store.defaultLimitMin))
     val state: StateFlow<UiState> = _state.asStateFlow()
 
@@ -106,6 +112,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             val weekEvents = UsageReader.read(context, dayStart - 6 * Time.DAY_MS, now).perApp
             val history = UsageReader.dailyHistory(context, HISTORY_DAYS)
 
+            val batteryToday = batteryStore.day(Time.dayKey(now))
+            val batteryWeek = HashMap<String, Float>()
+            for (i in 0 until CHART_DAYS) {
+                for ((pkg, pct) in batteryStore.day(Time.dayKey(now - i * Time.DAY_MS))) {
+                    batteryWeek[pkg] = (batteryWeek[pkg] ?: 0f) + pct
+                }
+            }
+
             val exempt = Apps.defaultExempt(context)
             // Kurulu ve başlatılabilir bütün uygulamalar listelenir; kullanılmayanlar da dahil.
             val packages = Apps.launchable(context) - Apps.hidden(context)
@@ -130,6 +144,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     rule = store.rule(pkg),
                     week = past.takeLast(CHART_DAYS - 1) + todayMs,
                     unlimited = unlimited,
+                    batteryTodayPct = batteryToday[pkg] ?: 0f,
+                    batteryWeekPct = batteryWeek[pkg] ?: 0f,
                 )
             }
 
@@ -163,6 +179,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 groups = groups,
                 totalTodayMs = total,
                 usedAppCount = used,
+                batteryTodayPct = rows.sumOf { it.batteryTodayPct.toDouble() }.toFloat(),
                 avgPerAppMs = if (used > 0) total / used else 0L,
                 weekTotals = List(CHART_DAYS) { i -> rows.sumOf { it.week[i] } },
                 weekLabels = dayLabels(now),

@@ -12,6 +12,7 @@ import android.content.res.ColorStateList
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.Typeface
+import android.os.BatteryManager
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
@@ -32,6 +33,7 @@ import com.hamurcuabi.usagelimit.MainActivity
 import com.hamurcuabi.usagelimit.R
 import com.hamurcuabi.usagelimit.data.AppCategory
 import com.hamurcuabi.usagelimit.data.Apps
+import com.hamurcuabi.usagelimit.data.BatteryStore
 import com.hamurcuabi.usagelimit.data.LimitStore
 import com.hamurcuabi.usagelimit.data.Permissions
 import com.hamurcuabi.usagelimit.data.Time
@@ -45,6 +47,14 @@ class MonitorService : Service() {
 
     private val handler = Handler(Looper.getMainLooper())
     private lateinit var store: LimitStore
+    private lateinit var batteryStore: BatteryStore
+    private lateinit var batteryManager: BatteryManager
+
+    private var prevBatteryPkg: String? = null
+    private var prevCharge = -1L
+    private var prevLevel = -1
+    private val pendingDrops = HashMap<String, Float>()
+    private var lastBatteryFlush = 0L
     private lateinit var powerManager: PowerManager
     private lateinit var windowManager: WindowManager
     private lateinit var notifications: NotificationManager
@@ -79,6 +89,8 @@ class MonitorService : Service() {
     override fun onCreate() {
         super.onCreate()
         store = LimitStore(this)
+        batteryStore = BatteryStore(this)
+        batteryManager = getSystemService(Context.BATTERY_SERVICE) as BatteryManager
         powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
         windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
         notifications = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -100,8 +112,50 @@ class MonitorService : Service() {
 
     override fun onDestroy() {
         handler.removeCallbacks(ticker)
+        flushBattery(System.currentTimeMillis())
         hideOverlay()
         super.onDestroy()
+    }
+
+    /**
+     * Son örnekten bu yana düşen pili, o aralıkta ön planda olan uygulamaya yazar.
+     * Şarjdayken ve ekran kapalıyken ölçüm yapılmaz.
+     */
+    private fun sampleBattery(foreground: String?, now: Long) {
+        val level = batteryManager.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
+        val charge = batteryManager.getIntProperty(BatteryManager.BATTERY_PROPERTY_CHARGE_COUNTER).toLong()
+        val charging = batteryManager.isCharging
+
+        val owner = prevBatteryPkg
+        if (!charging && owner != null && level in 1..100) {
+            val drop = when {
+                // Şarj sayacı (µAh) varsa yüzdeden çok daha hassas sonuç verir.
+                charge > 0 && prevCharge > 0 -> (prevCharge - charge).toFloat() * level / charge
+                prevLevel > 0 -> (prevLevel - level).toFloat()
+                else -> 0f
+            }
+            if (drop > 0f && drop < MAX_DROP_PER_TICK) {
+                pendingDrops[owner] = (pendingDrops[owner] ?: 0f) + drop
+            }
+        }
+
+        prevBatteryPkg = if (charging) null else foreground
+        prevCharge = charge
+        prevLevel = level
+        if (now - lastBatteryFlush > BATTERY_FLUSH_MS) flushBattery(now)
+    }
+
+    private fun resetBatterySample() {
+        prevBatteryPkg = null
+        prevCharge = -1L
+        prevLevel = -1
+    }
+
+    private fun flushBattery(now: Long) {
+        lastBatteryFlush = now
+        if (pendingDrops.isEmpty()) return
+        batteryStore.addAll(Time.dayKey(now), pendingDrops)
+        pendingDrops.clear()
     }
 
     private fun categoryOf(pkg: String): AppCategory =
@@ -109,6 +163,9 @@ class MonitorService : Service() {
 
     private fun tick() {
         if (!powerManager.isInteractive || !Permissions.hasUsageAccess(this)) {
+            // Ekran kapalıyken düşen pil hiçbir uygulamaya yazılmaz.
+            resetBatterySample()
+            flushBattery(System.currentTimeMillis())
             hideOverlay()
             return
         }
@@ -119,10 +176,12 @@ class MonitorService : Service() {
             launchable = Apps.launchable(this)
             exemptLoadedAt = now
             store.pruneOtherDays(Time.dayKey(now))
+            batteryStore.prune((0..7).mapTo(HashSet()) { Time.dayKey(now - it * Time.DAY_MS) })
         }
 
         val snapshot = UsageReader.read(this, Time.startOfDay(now), now)
         val pkg = snapshot.foreground
+        sampleBattery(pkg, now)
         if (pkg == null || pkg == packageName || store.isUnlimited(pkg, defaultExempt)) {
             hideOverlay()
             return
@@ -408,6 +467,8 @@ class MonitorService : Service() {
     companion object {
         private const val TICK_MS = 3_000L
         private const val CLOSE_GRACE_MS = 8_000L
+        private const val BATTERY_FLUSH_MS = 30_000L
+        private const val MAX_DROP_PER_TICK = 3f
         private const val EXEMPT_REFRESH_MS = 10 * 60 * 1000L
         private const val CHANNEL_STATUS = "status"
         private const val CHANNEL_ALERT = "alerts"
