@@ -57,6 +57,9 @@ class MonitorService : Service() {
     private var overlayView: View? = null
     private var overlayPkg: String? = null
 
+    private var closingPkg: String? = null
+    private var closingUntil = 0L
+
     private var lastFallbackPkg: String? = null
     private var lastFallbackAt = 0L
 
@@ -125,10 +128,24 @@ class MonitorService : Service() {
             return
         }
 
+        // "Uygulamadan çık"a basıldıktan sonra ana ekrana geçiş birkaç saniye sürebilir;
+        // bu arada sistem hâlâ eski uygulamayı ön planda gösterdiği için uyarıyı yeniden açma.
+        if (pkg == closingPkg && now < closingUntil) {
+            hideOverlay()
+            return
+        }
+        closingPkg = null
+
         val day = Time.dayKey(now)
         val label = Apps.label(this, pkg)
         val category = categoryOf(pkg)
         val usedMs = snapshot.perApp[pkg]?.totalMs ?: 0L
+
+        // Aynı anda hem uygulama hem grup limiti dolmuş olabilir; ikisi tek uyarıda toplanır.
+        val exceededKeys = ArrayList<String>(2)
+        var maxExtensions = 0
+        var title = ""
+        var body = ""
 
         // 1) Uygulamanın kendi limiti
         val limitMin = store.limitMinutes(pkg, defaultExempt, category.name)
@@ -137,15 +154,10 @@ class MonitorService : Service() {
             val extensions = store.extensionsUsed(pkg, day)
             ownAllowedMs = (limitMin + extensions * LimitStore.EXTENSION_MIN) * Time.MINUTE_MS
             if (usedMs >= ownAllowedMs) {
-                showLimitReached(
-                    pkg = pkg,
-                    title = "$label için bugünlük süre doldu",
-                    body = "Bugün ${Time.format(usedMs)} kullandın. Günlük limitin $limitMin dk.",
-                    extensionKey = pkg,
-                    extensions = extensions,
-                    day = day,
-                )
-                return
+                exceededKeys += pkg
+                maxExtensions = maxOf(maxExtensions, extensions)
+                title = "$label için bugünlük süre doldu"
+                body = "Bugün ${Time.format(usedMs)} kullandın. Günlük limitin $limitMin dk."
             }
         }
 
@@ -163,16 +175,21 @@ class MonitorService : Service() {
             val extensions = store.extensionsUsed(groupKey, day)
             groupAllowedMs = (groupMin + extensions * LimitStore.EXTENSION_MIN) * Time.MINUTE_MS
             if (groupUsedMs >= groupAllowedMs) {
-                showLimitReached(
-                    pkg = pkg,
-                    title = "${category.title} için bugünlük süre doldu",
-                    body = "Bu gruptaki uygulamalarda bugün toplam ${Time.format(groupUsedMs)} geçirdin. Grup limiti $groupMin dk.",
-                    extensionKey = groupKey,
-                    extensions = extensions,
-                    day = day,
-                )
-                return
+                val groupBody = "\"${category.title}\" grubunda bugün toplam ${Time.format(groupUsedMs)} geçirdin. Grup limiti $groupMin dk."
+                if (exceededKeys.isEmpty()) {
+                    title = "${category.title} için bugünlük süre doldu"
+                    body = groupBody
+                } else {
+                    body = "$body\n$groupBody"
+                }
+                exceededKeys += groupKey
+                maxExtensions = maxOf(maxExtensions, extensions)
             }
+        }
+
+        if (exceededKeys.isNotEmpty()) {
+            showLimitReached(pkg, title, body, exceededKeys, maxExtensions, day)
+            return
         }
 
         hideOverlay()
@@ -199,7 +216,7 @@ class MonitorService : Service() {
         pkg: String,
         title: String,
         body: String,
-        extensionKey: String,
+        extensionKeys: List<String>,
         extensions: Int,
         day: String,
     ) {
@@ -222,11 +239,14 @@ class MonitorService : Service() {
             body = body,
             extensionsLeft = LimitStore.MAX_EXTENSIONS - extensions,
             onClose = {
+                closingPkg = pkg
+                closingUntil = System.currentTimeMillis() + CLOSE_GRACE_MS
                 hideOverlay()
                 goHome()
             },
             onExtend = {
-                store.addExtension(extensionKey, day)
+                // Dolmuş bütün limitlere birlikte ek süre ver ki uyarı ikinci kez çıkmasın.
+                extensionKeys.forEach { store.addExtension(it, day) }
                 hideOverlay()
             },
         )
@@ -387,6 +407,7 @@ class MonitorService : Service() {
 
     companion object {
         private const val TICK_MS = 3_000L
+        private const val CLOSE_GRACE_MS = 8_000L
         private const val EXEMPT_REFRESH_MS = 10 * 60 * 1000L
         private const val CHANNEL_STATUS = "status"
         private const val CHANNEL_ALERT = "alerts"
