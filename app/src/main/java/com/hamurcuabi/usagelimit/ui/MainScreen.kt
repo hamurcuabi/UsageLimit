@@ -181,6 +181,11 @@ fun MainScreen(vm: MainViewModel = viewModel()) {
                         }
                     }
 
+                    item(key = "battery") {
+                        Spacer(Modifier.height(12.dp))
+                        BatteryCard(state) { editingPkg = it }
+                    }
+
                     item(key = "control") {
                         Spacer(Modifier.height(12.dp))
                         ControlCard(
@@ -365,13 +370,7 @@ private fun HeroCard(state: UiState, groups: List<Pair<AppCategory, List<AppRow>
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            if (state.batteryTodayPct > 0f) {
-                Text(
-                    "Ekran açıkken harcanan pil: ${formatPct(state.batteryTodayPct)}",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
+
 
             val shares = groups
                 .map { (category, rows) -> category to rows.sumOf { it.todayMs } }
@@ -433,6 +432,82 @@ private fun WeekBars(values: List<Long>, labels: List<String>, barHeight: Dp = 6
                     fontWeight = if (isToday) FontWeight.Bold else FontWeight.Normal,
                     color = if (isToday) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+            }
+        }
+    }
+}
+
+@Composable
+private fun BatteryCard(state: UiState, onApp: (String) -> Unit) {
+    val scheme = MaterialTheme.colorScheme
+    val top = state.rows.filter { it.batteryTodayPct >= 0.1f }
+        .sortedByDescending { it.batteryTodayPct }
+        .take(5)
+    Surface(
+        shape = MaterialTheme.shapes.large,
+        color = scheme.surfaceContainer,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(vertical = 14.dp)) {
+            Row(
+                Modifier.padding(horizontal = 20.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("Pil", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        when {
+                            !state.monitoring -> "Ölçmek için aşağıdan izlemeyi aç"
+                            top.isNotEmpty() -> "Bugün, uygulamalar ekrandayken"
+                            state.charging -> "Şarjdayken ölçülmez; fişten çekince başlar"
+                            else -> "Ölçüm toplanıyor; birkaç dakika kullandıktan sonra görünür"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = scheme.onSurfaceVariant,
+                    )
+                }
+                if (state.batteryTodayPct > 0f) {
+                    Text(
+                        formatPct(state.batteryTodayPct),
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
+            }
+            if (top.isNotEmpty()) {
+                Spacer(Modifier.height(6.dp))
+                val max = top.first().batteryTodayPct
+                top.forEach { row ->
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .clickable { onApp(row.pkg) }
+                            .padding(horizontal = 20.dp, vertical = 7.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        AppIcon(row.pkg, 28.dp)
+                        Spacer(Modifier.width(12.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                row.label,
+                                style = MaterialTheme.typography.bodyMedium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Spacer(Modifier.height(4.dp))
+                            ProgressTrack(
+                                fraction = (row.batteryTodayPct / max).coerceIn(0f, 1f),
+                                color = scheme.primary,
+                            )
+                        }
+                        Spacer(Modifier.width(12.dp))
+                        Text(
+                            formatPct(row.batteryTodayPct),
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    }
+                }
             }
         }
     }

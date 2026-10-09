@@ -1,6 +1,8 @@
 package com.hamurcuabi.usagelimit.ui
 
 import android.app.Application
+import android.content.Context
+import android.os.BatteryManager
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.hamurcuabi.usagelimit.data.AppCategory
@@ -67,6 +69,7 @@ data class UiState(
     val avgPerAppMs: Long = 0,
     val usedAppCount: Int = 0,
     val batteryTodayPct: Float = 0f,
+    val charging: Boolean = false,
     /** Son 7 günün toplamları (bugün en sonda) ve gün etiketleri. */
     val weekTotals: List<Long> = emptyList(),
     val weekLabels: List<String> = emptyList(),
@@ -92,6 +95,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 batteryOk = Permissions.ignoresBatteryOptimizations(context),
                 monitoring = store.monitoringEnabled,
                 defaultLimitMin = store.defaultLimitMin,
+                charging = (context.getSystemService(Context.BATTERY_SERVICE) as BatteryManager).isCharging,
             )
             if (!hasAccess) {
                 _state.value = base.copy(rows = emptyList(), totalTodayMs = 0, avgPerAppMs = 0)

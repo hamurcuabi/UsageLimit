@@ -53,6 +53,8 @@ class MonitorService : Service() {
     private var prevBatteryPkg: String? = null
     private var prevCharge = -1L
     private var prevLevel = -1
+    private var useChargeCounter = true
+    private var chargeAtLevelChange = -1L
     private val pendingDrops = HashMap<String, Float>()
     private var lastBatteryFlush = 0L
     private lateinit var powerManager: PowerManager
@@ -126,11 +128,19 @@ class MonitorService : Service() {
         val charge = batteryManager.getIntProperty(BatteryManager.BATTERY_PROPERTY_CHARGE_COUNTER).toLong()
         val charging = batteryManager.isCharging
 
+        // Bazı telefonlarda şarj sayacı hiç değişmez. Yüzde düştüğü hâlde sayaç aynı
+        // kaldıysa sayaca güvenmeyi bırakıp yüzdeye göre ölç.
+        if (prevLevel > 0 && level != prevLevel) {
+            if (charge <= 0 || charge == chargeAtLevelChange) useChargeCounter = false
+            chargeAtLevelChange = charge
+        }
+
         val owner = prevBatteryPkg
         if (!charging && owner != null && level in 1..100) {
             val drop = when {
-                // Şarj sayacı (µAh) varsa yüzdeden çok daha hassas sonuç verir.
-                charge > 0 && prevCharge > 0 -> (prevCharge - charge).toFloat() * level / charge
+                // Şarj sayacı (µAh) çalışıyorsa yüzdeden çok daha hassas sonuç verir.
+                useChargeCounter && charge > 0 && prevCharge > 0 ->
+                    (prevCharge - charge).toFloat() * level / charge
                 prevLevel > 0 -> (prevLevel - level).toFloat()
                 else -> 0f
             }
