@@ -71,12 +71,12 @@ private const val STALE_AFTER_MS = 3 * 60 * 60 * 1000L
 
 /** Ebeveyn tarafının kökü: giriş -> çocuk listesi -> çocuk detayı. */
 @Composable
-fun ParentRoot(onExit: () -> Unit) {
+fun ParentRoot() {
     var signedIn by remember { mutableStateOf(ParentCloud.uid != null) }
     var openChildId by rememberSaveable { mutableStateOf<String?>(null) }
 
     if (!signedIn) {
-        ParentAuthScreen(onSignedIn = { signedIn = true }, onBack = onExit)
+        ParentAuthScreen(onSignedIn = { signedIn = true })
     } else {
         val children by remember { ParentCloud.children() }.collectAsStateWithLifecycle(initialValue = null)
         val open = children?.firstOrNull { it.id == openChildId }
@@ -89,7 +89,6 @@ fun ParentRoot(onExit: () -> Unit) {
                 onSignOut = {
                     ParentCloud.signOut()
                     signedIn = false
-                    onExit()
                 },
             )
         }
@@ -97,14 +96,12 @@ fun ParentRoot(onExit: () -> Unit) {
 }
 
 @Composable
-private fun ParentAuthScreen(onSignedIn: () -> Unit, onBack: () -> Unit) {
+private fun ParentAuthScreen(onSignedIn: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val configured = remember { ParentCloud.googleSignInConfigured(context) }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
-
-    BackHandler(enabled = !busy, onBack = onBack)
 
     Scaffold(containerColor = MaterialTheme.colorScheme.background) { padding ->
         Column(
@@ -116,13 +113,13 @@ private fun ParentAuthScreen(onSignedIn: () -> Unit, onBack: () -> Unit) {
             verticalArrangement = Arrangement.Center,
         ) {
             Text(
-                "Ebeveyn girişi",
+                "Çocuklarım",
                 style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.SemiBold,
             )
             Spacer(Modifier.height(8.dp))
             Text(
-                "Çocuklarının kayıtları Google hesabına bağlanır. Başka bir telefondan aynı hesapla girince hepsini görürsün.",
+                "Çocuğunun telefonundaki kullanımı görmek ve limit koymak için Google hesabınla gir. Kayıtlar hesabına bağlanır; başka telefondan aynı hesapla girince hepsini görürsün.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -158,7 +155,6 @@ private fun ParentAuthScreen(onSignedIn: () -> Unit, onBack: () -> Unit) {
             ) {
                 Text("Google ile giriş yap", modifier = Modifier.padding(vertical = 6.dp))
             }
-            TextButton(onClick = onBack, enabled = !busy) { Text("Geri") }
         }
     }
 }
@@ -380,6 +376,7 @@ private fun ParentChildScreen(child: Child, onBack: () -> Unit) {
             batteryOk = true,
             monitoring = true,
             calendar = data?.calendar ?: emptyMap(),
+            dayDetails = data?.dayDetails ?: emptyMap(),
         ).withData(
             apps = data?.apps ?: emptyList(),
             rules = rules,

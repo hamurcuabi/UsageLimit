@@ -116,6 +116,7 @@ class ChildSync(
                 "apps" to apps.map { it.toMap() },
                 // Takvim: gün -> [dolan limit sayısı, alınan ek süre sayısı]
                 "calendar" to HistoryStore(context).all().mapValues { listOf(it.value.reached, it.value.extensions) },
+                "details" to HistoryStore(context).rawDetails(now),
             )
         )
         Cloud.child(childId).update(

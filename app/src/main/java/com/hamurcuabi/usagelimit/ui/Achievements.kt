@@ -1,7 +1,10 @@
+@file:OptIn(ExperimentalMaterial3Api::class)
+
 package com.hamurcuabi.usagelimit.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -16,7 +19,15 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -36,22 +47,29 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.hamurcuabi.usagelimit.data.Achievements
 import com.hamurcuabi.usagelimit.data.Badge
+import com.hamurcuabi.usagelimit.data.DayDetail
 import com.hamurcuabi.usagelimit.data.DayRecord
 import com.hamurcuabi.usagelimit.data.DayState
 import com.hamurcuabi.usagelimit.data.Time
 import java.text.SimpleDateFormat
 import java.util.Calendar
+import java.util.Date
 import java.util.Locale
 
 private val KeptGreen = Color(0xFF3FA772)
 
 /** Seri, aylık takvim ve rozetler. */
 @Composable
-internal fun AchievementsCard(calendar: Map<String, DayRecord>, emptyHint: String) {
+internal fun AchievementsCard(
+    calendar: Map<String, DayRecord>,
+    details: Map<String, DayDetail>,
+    emptyHint: String,
+) {
     val scheme = MaterialTheme.colorScheme
     val now = remember { System.currentTimeMillis() }
     val stats = remember(calendar) { Achievements.from(calendar, now) }
     var monthOffset by rememberSaveable { mutableIntStateOf(0) }
+    var selectedDay by rememberSaveable { mutableStateOf<String?>(null) }
 
     Surface(
         shape = MaterialTheme.shapes.large,
@@ -84,7 +102,16 @@ internal fun AchievementsCard(calendar: Map<String, DayRecord>, emptyHint: Strin
                 monthOffset = monthOffset,
                 onPrevious = { monthOffset -= 1 },
                 onNext = { if (monthOffset < 0) monthOffset += 1 },
+                onDay = { selectedDay = it },
             )
+            if (calendar.isNotEmpty()) {
+                Text(
+                    "Renkli bir güne dokununca o günün ayrıntısı açılır.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = scheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
+            }
 
             Spacer(Modifier.height(12.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
@@ -108,6 +135,142 @@ internal fun AchievementsCard(calendar: Map<String, DayRecord>, emptyHint: Strin
             }
         }
     }
+
+    val day = selectedDay
+    val record = day?.let { calendar[it] }
+    if (day != null && record != null) {
+        ModalBottomSheet(
+            onDismissRequest = { selectedDay = null },
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+            containerColor = scheme.surfaceContainerLow,
+        ) {
+            DayDetailSheet(day, record, details[day])
+        }
+    }
+}
+
+@Composable
+private fun DayDetailSheet(day: String, record: DayRecord, detail: DayDetail?) {
+    val scheme = MaterialTheme.colorScheme
+    val title = remember(day) {
+        val date = SimpleDateFormat("yyyyMMdd", Locale.US).parse(day) ?: Date()
+        SimpleDateFormat("d MMMM EEEE", Locale.forLanguageTag("tr")).format(date)
+    }
+    val timeFormat = remember { SimpleDateFormat("HH:mm", Locale.US) }
+    val (stateColor, stateText) = when (record.state) {
+        DayState.PERFECT -> scheme.primary to "Kusursuz gün: hiçbir limit dolmadı"
+        DayState.KEPT -> KeptGreen to "Sınır aşılmadı: limit doldu ama ek süre alınmadı"
+        DayState.EXCEEDED -> scheme.error to "Ek süre alındı"
+    }
+
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .verticalScroll(rememberScrollState())
+            .padding(start = 20.dp, end = 20.dp, bottom = 32.dp),
+    ) {
+        Text(title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+        Spacer(Modifier.height(6.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                Modifier
+                    .size(10.dp)
+                    .clip(CircleShape)
+                    .background(stateColor)
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(stateText, style = MaterialTheme.typography.bodyMedium)
+        }
+
+        Spacer(Modifier.height(18.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            DayStat("Ekran süresi", if (detail != null && detail.totalMs > 0) Time.format(detail.totalMs) else "–", Modifier.weight(1f))
+            DayStat("Dolan limit", "${record.reached}", Modifier.weight(1f))
+            DayStat("Ek süre", "${record.extensions}", Modifier.weight(1f))
+        }
+
+        if (detail == null) {
+            Spacer(Modifier.height(18.dp))
+            Text(
+                "Bu gün için ayrıntı kaydı yok; ayrıntılar bu sürümden itibaren tutuluyor.",
+                style = MaterialTheme.typography.bodySmall,
+                color = scheme.onSurfaceVariant,
+            )
+        } else {
+
+        if (detail.topApps.isNotEmpty()) {
+            Spacer(Modifier.height(22.dp))
+            Text("En çok kullanılanlar", style = MaterialTheme.typography.titleSmall)
+            Spacer(Modifier.height(8.dp))
+            val max = detail.topApps.maxOf { it.second }.coerceAtLeast(1L)
+            detail.topApps.forEach { (label, ms) ->
+                Row(Modifier.padding(vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(label, style = MaterialTheme.typography.bodyMedium, maxLines = 1)
+                        Spacer(Modifier.height(4.dp))
+                        Box(
+                            Modifier
+                                .fillMaxWidth()
+                                .height(4.dp)
+                                .clip(RoundedCornerShape(2.dp))
+                                .background(scheme.outlineVariant)
+                        ) {
+                            Box(
+                                Modifier
+                                    .fillMaxWidth((ms.toFloat() / max).coerceIn(0.02f, 1f))
+                                    .fillMaxHeight()
+                                    .background(scheme.primary)
+                            )
+                        }
+                    }
+                    Spacer(Modifier.width(14.dp))
+                    Text(Time.format(ms), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                }
+            }
+        }
+
+        Spacer(Modifier.height(22.dp))
+        Text("Gün içinde olanlar", style = MaterialTheme.typography.titleSmall)
+        Spacer(Modifier.height(4.dp))
+        if (detail.events.isEmpty()) {
+            Text(
+                "Hiçbir limit dolmadı.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = scheme.onSurfaceVariant,
+            )
+        }
+        detail.events.forEachIndexed { index, event ->
+            if (index > 0) HorizontalDivider(color = scheme.outlineVariant)
+            Row(Modifier.padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    timeFormat.format(Date(event.at)),
+                    style = MaterialTheme.typography.labelLarge,
+                    color = scheme.onSurfaceVariant,
+                    modifier = Modifier.width(52.dp),
+                )
+                Text(
+                    if (event.extension) "${event.label}: ek süre alındı" else "${event.label}: limit doldu",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (event.extension) scheme.error else scheme.onSurface,
+                )
+            }
+        }
+        }
+    }
+}
+
+@Composable
+private fun DayStat(label: String, value: String, modifier: Modifier = Modifier) {
+    val scheme = MaterialTheme.colorScheme
+    Column(
+        modifier
+            .clip(MaterialTheme.shapes.medium)
+            .background(scheme.surfaceContainerHigh)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+    ) {
+        Text(label, style = MaterialTheme.typography.labelMedium, color = scheme.onSurfaceVariant, maxLines = 1)
+        Text(value, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, maxLines = 1)
+    }
 }
 
 @Composable
@@ -117,6 +280,7 @@ private fun MonthCalendar(
     monthOffset: Int,
     onPrevious: () -> Unit,
     onNext: () -> Unit,
+    onDay: (String) -> Unit,
 ) {
     val scheme = MaterialTheme.colorScheme
     val todayKey = Time.dayKey(now)
@@ -210,6 +374,7 @@ private fun MonthCalendar(
                                 .aspectRatio(1f)
                                 .clip(CircleShape)
                                 .background(fill)
+                                .then(if (record != null) Modifier.clickable { onDay(key) } else Modifier)
                                 .then(
                                     if (isToday) Modifier.border(2.dp, scheme.onSurface, CircleShape)
                                     else if (record == null && !isFuture) Modifier.border(1.dp, scheme.outlineVariant, CircleShape)

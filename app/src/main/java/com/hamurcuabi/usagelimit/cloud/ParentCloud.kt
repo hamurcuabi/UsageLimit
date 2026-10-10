@@ -13,6 +13,7 @@ import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.Query
 import com.google.firebase.firestore.SetOptions
 import com.google.firebase.messaging.FirebaseMessaging
+import com.hamurcuabi.usagelimit.data.DayDetail
 import com.hamurcuabi.usagelimit.data.DayRecord
 import com.hamurcuabi.usagelimit.data.RawApp
 import com.hamurcuabi.usagelimit.data.RuleSet
@@ -40,6 +41,7 @@ data class ChildSnapshot(
     val weekLabels: List<String> = emptyList(),
     val apps: List<RawApp> = emptyList(),
     val calendar: Map<String, DayRecord> = emptyMap(),
+    val dayDetails: Map<String, DayDetail> = emptyMap(),
 )
 
 data class ChildEvent(
@@ -239,6 +241,10 @@ object ParentCloud {
                     )
                 }
             }
+            val details = HashMap<String, DayDetail>()
+            (doc.get("details") as? Map<*, *>)?.forEach { (day, raw) ->
+                if (day is String && raw is String) DayDetail.parse(raw)?.let { details[day] = it }
+            }
             trySend(
                 ChildSnapshot(
                     day = doc.getString("day") ?: "",
@@ -246,6 +252,7 @@ object ParentCloud {
                     weekLabels = (doc.get("weekLabels") as? List<*>)?.filterIsInstance<String>() ?: emptyList(),
                     apps = apps ?: emptyList(),
                     calendar = calendar,
+                    dayDetails = details,
                 )
             )
         }

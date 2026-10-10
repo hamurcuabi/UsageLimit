@@ -41,6 +41,7 @@ import kotlinx.coroutines.cancel
 import com.hamurcuabi.usagelimit.data.AppCategory
 import com.hamurcuabi.usagelimit.data.Apps
 import com.hamurcuabi.usagelimit.data.BatteryStore
+import com.hamurcuabi.usagelimit.data.DayEvent
 import com.hamurcuabi.usagelimit.data.HistoryStore
 import com.hamurcuabi.usagelimit.data.LimitStore
 import com.hamurcuabi.usagelimit.data.Permissions
@@ -76,6 +77,8 @@ class MonitorService : Service() {
 
     private var defaultExempt: Set<String> = emptySet()
     private var launchable: Set<String> = emptySet()
+    private var hidden: Set<String> = emptySet()
+    private var lastDetailSave = 0L
     private val categoryCache = HashMap<String, AppCategory>()
     private var exemptLoadedAt = 0L
 
@@ -217,6 +220,7 @@ class MonitorService : Service() {
         if (now - exemptLoadedAt > EXEMPT_REFRESH_MS) {
             defaultExempt = Apps.defaultExempt(this)
             launchable = Apps.launchable(this)
+            hidden = Apps.hidden(this)
             exemptLoadedAt = now
             store.pruneOtherDays(Time.dayKey(now))
             batteryStore.prune((0..7).mapTo(HashSet()) { Time.dayKey(now - it * Time.DAY_MS) })
@@ -233,6 +237,18 @@ class MonitorService : Service() {
             historyStore.markActive(todayKey)
             historyStore.prune(now)
             activeDay = todayKey
+            lastDetailSave = 0L
+        }
+        // Takvimdeki gün ayrıntısı için: toplam süre ve en çok kullanılan uygulamalar.
+        if (now - lastDetailSave > DETAIL_SAVE_MS) {
+            lastDetailSave = now
+            val shown = snapshot.perApp.filter { it.key in launchable && it.key !in hidden }
+            historyStore.saveUsage(
+                todayKey,
+                shown.values.sumOf { it.totalMs },
+                shown.entries.sortedByDescending { it.value.totalMs }.take(5)
+                    .map { Apps.label(this, it.key) to it.value.totalMs },
+            )
         }
         if (pkg == null || pkg == packageName || store.isUnlimited(pkg, defaultExempt)) {
             hideOverlay()
@@ -309,6 +325,7 @@ class MonitorService : Service() {
             if (info != null && !store.wasWarned("reached:" + exceededKeys.first(), day)) {
                 store.markWarned("reached:" + exceededKeys.first(), day)
                 historyStore.addReached(day)
+                historyStore.addEvent(day, DayEvent(now, info.subject, extension = false))
                 childSync?.logEvent(
                     ChildSync.EVENT_LIMIT_REACHED, info.pkg, info.label, info.scope,
                     info.groupTitle, info.usedMs, info.limitMin,
@@ -375,6 +392,9 @@ class MonitorService : Service() {
                 // Dolmuş bütün limitlere birlikte ek süre ver ki uyarı ikinci kez çıkmasın.
                 extensionKeys.forEach { store.addExtension(it, day) }
                 historyStore.addExtension(day)
+                if (event != null) {
+                    historyStore.addEvent(day, DayEvent(System.currentTimeMillis(), event.subject, extension = true))
+                }
                 if (event != null) {
                     childSync?.logEvent(
                         ChildSync.EVENT_EXTENSION, event.pkg, event.label, event.scope,
@@ -547,12 +567,16 @@ class MonitorService : Service() {
         val groupTitle: String?,
         val usedMs: Long,
         val limitMin: Int,
-    )
+    ) {
+        /** Takvimde gösterilecek ad: uygulama ya da grup. */
+        val subject: String get() = if (groupTitle != null) "$groupTitle grubu" else label
+    }
 
     companion object {
         private const val TICK_MS = 3_000L
         private const val CLOSE_GRACE_MS = 8_000L
         private const val BATTERY_FLUSH_MS = 30_000L
+        private const val DETAIL_SAVE_MS = 2 * 60 * 1000L
         private const val MAX_DROP_PER_TICK = 3f
         private const val EXEMPT_REFRESH_MS = 10 * 60 * 1000L
         private const val CHANNEL_STATUS = "status"

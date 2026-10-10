@@ -239,6 +239,7 @@ fun Dashboard(
                         Spacer(Modifier.height(12.dp))
                         AchievementsCard(
                             calendar = state.calendar,
+                            details = state.dayDetails,
                             emptyHint = when {
                                 mode == DashboardMode.REMOTE -> "Çocuğun telefonundan veri gelince dolmaya başlar"
                                 !state.monitoring -> "İzlemeyi açınca günler takvime işlenir"

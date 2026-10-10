@@ -63,17 +63,14 @@ fun RoleScreen(cloudAvailable: Boolean, onPick: (Role) -> Unit) {
             Spacer(Modifier.height(20.dp))
 
             RoleOption(
-                title = "Kendim için",
-                description = "Kendi kullanımını gör, limitlerini kendin koy.",
+                title = "Benim telefonum",
+                description = if (cloudAvailable) {
+                    "Kendi kullanımını gör, limitlerini koy. Çocuklarını da aynı yerden, alt sekmeden yönetirsin."
+                } else {
+                    "Kendi kullanımını gör, limitlerini kendin koy."
+                },
                 enabled = true,
                 onClick = { onPick(Role.LOCAL) },
-            )
-            Spacer(Modifier.height(12.dp))
-            RoleOption(
-                title = "Ebeveynim",
-                description = "Çocuğunun telefonundaki uygulamaları gör, limitleri buradan koy, ek süre aldığında haberin olsun.",
-                enabled = cloudAvailable,
-                onClick = { onPick(Role.PARENT) },
             )
             Spacer(Modifier.height(12.dp))
             RoleOption(
@@ -86,7 +83,7 @@ fun RoleScreen(cloudAvailable: Boolean, onPick: (Role) -> Unit) {
             if (!cloudAvailable) {
                 Spacer(Modifier.height(16.dp))
                 Text(
-                    "Ebeveyn ve çocuk kullanımı için Firebase yapılandırması gerekiyor; bu sürüme henüz eklenmemiş.",
+                    "Çocuk telefonu olarak kullanım için Firebase yapılandırması gerekiyor; bu sürüme henüz eklenmemiş.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

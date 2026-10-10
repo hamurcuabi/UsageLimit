@@ -7,6 +7,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.hamurcuabi.usagelimit.data.AppCategory
 import com.hamurcuabi.usagelimit.data.BatteryStore
+import com.hamurcuabi.usagelimit.data.DayDetail
 import com.hamurcuabi.usagelimit.data.DayRecord
 import com.hamurcuabi.usagelimit.data.HistoryStore
 import com.hamurcuabi.usagelimit.data.LimitStore
@@ -82,6 +83,7 @@ data class UiState(
     val groups: Map<AppCategory, GroupInfo> = emptyMap(),
     /** Gün (yyyyMMdd) -> o günün limit karnesi; takvim ve rozetler için. */
     val calendar: Map<String, DayRecord> = emptyMap(),
+    val dayDetails: Map<String, DayDetail> = emptyMap(),
 )
 
 /**
@@ -173,6 +175,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 monitoring = store.monitoringEnabled,
                 defaultLimitMin = store.defaultLimitMin,
                 calendar = historyStore.all(),
+                dayDetails = historyStore.details(),
                 charging = (context.getSystemService(Context.BATTERY_SERVICE) as BatteryManager).isCharging,
             )
             if (!hasAccess) {

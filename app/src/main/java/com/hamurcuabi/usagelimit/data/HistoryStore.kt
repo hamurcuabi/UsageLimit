@@ -1,6 +1,8 @@
 package com.hamurcuabi.usagelimit.data
 
 import android.content.Context
+import org.json.JSONArray
+import org.json.JSONObject
 
 /** Bir günün limit karnesi. */
 data class DayRecord(
@@ -28,6 +30,46 @@ enum class DayState {
     EXCEEDED;
 
     val success: Boolean get() = this != EXCEEDED
+}
+
+/** Gün içinde yaşanan bir limit olayı. */
+data class DayEvent(val at: Long, val label: String, val extension: Boolean)
+
+/** Takvimde güne dokununca gösterilen ayrıntı. */
+data class DayDetail(
+    val totalMs: Long = 0L,
+    /** En çok kullanılan uygulamalar: ad ve süre. */
+    val topApps: List<Pair<String, Long>> = emptyList(),
+    val events: List<DayEvent> = emptyList(),
+) {
+    fun toJson(): String {
+        val apps = JSONArray()
+        topApps.forEach { (label, ms) -> apps.put(JSONArray().put(label).put(ms)) }
+        val list = JSONArray()
+        events.forEach { list.put(JSONArray().put(it.at).put(it.label).put(if (it.extension) "x" else "r")) }
+        return JSONObject().put("t", totalMs).put("a", apps).put("e", list).toString()
+    }
+
+    companion object {
+        fun parse(raw: String): DayDetail? = try {
+            val json = JSONObject(raw)
+            val apps = json.optJSONArray("a") ?: JSONArray()
+            val events = json.optJSONArray("e") ?: JSONArray()
+            DayDetail(
+                totalMs = json.optLong("t"),
+                topApps = List(apps.length()) { i ->
+                    val item = apps.getJSONArray(i)
+                    item.getString(0) to item.getLong(1)
+                },
+                events = List(events.length()) { i ->
+                    val item = events.getJSONArray(i)
+                    DayEvent(item.getLong(0), item.getString(1), item.getString(2) == "x")
+                },
+            )
+        } catch (_: Exception) {
+            null
+        }
+    }
 }
 
 /**
@@ -62,6 +104,41 @@ class HistoryStore(context: Context) {
         write(day, current.copy(extensions = current.extensions + 1))
     }
 
+    private val detailPrefs =
+        context.applicationContext.getSharedPreferences("history_detail", Context.MODE_PRIVATE)
+
+    fun detail(day: String): DayDetail? = detailPrefs.getString(day, null)?.let { DayDetail.parse(it) }
+
+    /** Günün toplam süresini ve en çok kullanılan uygulamalarını günceller. */
+    fun saveUsage(day: String, totalMs: Long, topApps: List<Pair<String, Long>>) {
+        val current = detail(day) ?: DayDetail()
+        detailPrefs.edit().putString(day, current.copy(totalMs = totalMs, topApps = topApps).toJson()).apply()
+    }
+
+    fun addEvent(day: String, event: DayEvent) {
+        val current = detail(day) ?: DayDetail()
+        val events = (current.events + event).takeLast(MAX_EVENTS_PER_DAY)
+        detailPrefs.edit().putString(day, current.copy(events = events).toJson()).apply()
+    }
+
+    fun details(): Map<String, DayDetail> {
+        val result = HashMap<String, DayDetail>()
+        for ((day, raw) in detailPrefs.all) {
+            if (raw is String) DayDetail.parse(raw)?.let { result[day] = it }
+        }
+        return result
+    }
+
+    /** Son [days] günün ayrıntıları, buluta gönderilecek ham hâliyle. */
+    fun rawDetails(now: Long, days: Int = 45): Map<String, String> {
+        val oldest = Time.dayKey(now - days * Time.DAY_MS)
+        val result = HashMap<String, String>()
+        for ((day, raw) in detailPrefs.all) {
+            if (raw is String && day >= oldest) result[day] = raw
+        }
+        return result
+    }
+
     fun all(): Map<String, DayRecord> {
         val result = HashMap<String, DayRecord>()
         for (key in prefs.all.keys) {
@@ -73,15 +150,18 @@ class HistoryStore(context: Context) {
     /** [KEEP_DAYS] günden eski kayıtları siler. */
     fun prune(now: Long = System.currentTimeMillis()) {
         val oldest = Time.dayKey(now - KEEP_DAYS * Time.DAY_MS)
-        val stale = prefs.all.keys.filter { it < oldest }
-        if (stale.isEmpty()) return
-        val editor = prefs.edit()
-        stale.forEach { editor.remove(it) }
-        editor.apply()
+        for (store in listOf(prefs, detailPrefs)) {
+            val stale = store.all.keys.filter { it < oldest }
+            if (stale.isEmpty()) continue
+            val editor = store.edit()
+            stale.forEach { editor.remove(it) }
+            editor.apply()
+        }
     }
 
     companion object {
         private const val KEEP_DAYS = 400L
+        private const val MAX_EVENTS_PER_DAY = 60
     }
 }
 
