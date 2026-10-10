@@ -98,10 +98,9 @@ fun ParentRoot(onExit: () -> Unit) {
 
 @Composable
 private fun ParentAuthScreen(onSignedIn: () -> Unit, onBack: () -> Unit) {
+    val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    var email by rememberSaveable { mutableStateOf("") }
-    var password by rememberSaveable { mutableStateOf("") }
-    var creating by rememberSaveable { mutableStateOf(false) }
+    val configured = remember { ParentCloud.googleSignInConfigured(context) }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
 
@@ -117,46 +116,36 @@ private fun ParentAuthScreen(onSignedIn: () -> Unit, onBack: () -> Unit) {
             verticalArrangement = Arrangement.Center,
         ) {
             Text(
-                if (creating) "Ebeveyn hesabı oluştur" else "Ebeveyn girişi",
+                "Ebeveyn girişi",
                 style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.SemiBold,
             )
-            Spacer(Modifier.height(20.dp))
-            OutlinedTextField(
-                value = email,
-                onValueChange = { email = it },
-                label = { Text("E-posta") },
-                singleLine = true,
-                enabled = !busy,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
-                shape = MaterialTheme.shapes.medium,
-                modifier = Modifier.fillMaxWidth(),
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "Çocuklarının kayıtları Google hesabına bağlanır. Başka bir telefondan aynı hesapla girince hepsini görürsün.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            Spacer(Modifier.height(12.dp))
-            OutlinedTextField(
-                value = password,
-                onValueChange = { password = it },
-                label = { Text("Şifre") },
-                singleLine = true,
-                enabled = !busy,
-                visualTransformation = PasswordVisualTransformation(),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                shape = MaterialTheme.shapes.medium,
-                modifier = Modifier.fillMaxWidth(),
-            )
+            if (!configured) {
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    "Google girişi bu sürümde henüz yapılandırılmamış.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
             if (error != null) {
                 Spacer(Modifier.height(12.dp))
                 Text(error ?: "", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error)
             }
-            Spacer(Modifier.height(20.dp))
+            Spacer(Modifier.height(24.dp))
             Button(
                 onClick = {
                     busy = true
                     error = null
                     scope.launch {
                         try {
-                            if (creating) ParentCloud.signUp(email, password) else ParentCloud.signIn(email, password)
-                            onSignedIn()
+                            if (ParentCloud.signInWithGoogle(context)) onSignedIn()
                         } catch (e: Exception) {
                             error = e.localizedMessage ?: "Giriş başarısız."
                         } finally {
@@ -164,13 +153,10 @@ private fun ParentAuthScreen(onSignedIn: () -> Unit, onBack: () -> Unit) {
                         }
                     }
                 },
-                enabled = !busy && email.contains("@") && password.length >= 6,
+                enabled = configured && !busy,
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                Text(if (creating) "Hesap oluştur" else "Giriş yap", modifier = Modifier.padding(vertical = 6.dp))
-            }
-            TextButton(onClick = { creating = !creating }, enabled = !busy) {
-                Text(if (creating) "Zaten hesabım var" else "Hesabım yok, oluştur")
+                Text("Google ile giriş yap", modifier = Modifier.padding(vertical = 6.dp))
             }
             TextButton(onClick = onBack, enabled = !busy) { Text("Geri") }
         }

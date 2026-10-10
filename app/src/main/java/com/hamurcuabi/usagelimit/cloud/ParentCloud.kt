@@ -1,5 +1,14 @@
 package com.hamurcuabi.usagelimit.cloud
 
+import android.annotation.SuppressLint
+import android.content.Context
+import androidx.credentials.CredentialManager
+import androidx.credentials.CustomCredential
+import androidx.credentials.GetCredentialRequest
+import androidx.credentials.exceptions.GetCredentialCancellationException
+import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
+import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
+import com.google.firebase.auth.GoogleAuthProvider
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.Query
 import com.google.firebase.firestore.SetOptions
@@ -49,14 +58,41 @@ object ParentCloud {
     val uid: String? get() = Cloud.auth.currentUser?.takeIf { !it.isAnonymous }?.uid
     val email: String? get() = Cloud.auth.currentUser?.email
 
-    suspend fun signIn(email: String, password: String) {
-        Cloud.auth.signInWithEmailAndPassword(email.trim(), password).await()
-        registerPushToken()
+    /** google-services.json içinde Google girişi için gereken istemci kimliği var mı? */
+    fun googleSignInConfigured(context: Context): Boolean = webClientId(context) != null
+
+    @SuppressLint("DiscouragedApi")
+    private fun webClientId(context: Context): String? {
+        // Bu değer google-services eklentisi tarafından üretilir; Google girişi konsolda
+        // açılmadan indirilen yapılandırmada bulunmaz, bu yüzden adıyla aranıyor.
+        val id = context.resources.getIdentifier("default_web_client_id", "string", context.packageName)
+        return if (id != 0) context.getString(id) else null
     }
 
-    suspend fun signUp(email: String, password: String) {
-        Cloud.auth.createUserWithEmailAndPassword(email.trim(), password).await()
+    /**
+     * Google hesabıyla giriş. [activityContext] hesap seçme penceresini açabilmek için
+     * bir Activity olmalı. Kullanıcı pencereyi kapatırsa false döner.
+     */
+    suspend fun signInWithGoogle(activityContext: Context): Boolean {
+        val clientId = webClientId(activityContext)
+            ?: error("Google girişi bu sürümde yapılandırılmamış.")
+        val request = GetCredentialRequest.Builder()
+            .addCredentialOption(GetSignInWithGoogleOption.Builder(clientId).build())
+            .build()
+        val credential = try {
+            CredentialManager.create(activityContext).getCredential(activityContext, request).credential
+        } catch (_: GetCredentialCancellationException) {
+            return false
+        }
+        if (credential !is CustomCredential ||
+            credential.type != GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL
+        ) {
+            error("Google hesabı alınamadı.")
+        }
+        val idToken = GoogleIdTokenCredential.createFrom(credential.data).idToken
+        Cloud.auth.signInWithCredential(GoogleAuthProvider.getCredential(idToken, null)).await()
         registerPushToken()
+        return true
     }
 
     fun signOut() {
