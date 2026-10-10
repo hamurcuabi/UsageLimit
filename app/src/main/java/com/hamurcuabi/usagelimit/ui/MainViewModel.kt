@@ -7,6 +7,8 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.hamurcuabi.usagelimit.data.AppCategory
 import com.hamurcuabi.usagelimit.data.BatteryStore
+import com.hamurcuabi.usagelimit.data.DayRecord
+import com.hamurcuabi.usagelimit.data.HistoryStore
 import com.hamurcuabi.usagelimit.data.LimitStore
 import com.hamurcuabi.usagelimit.data.Permissions
 import com.hamurcuabi.usagelimit.data.RawApp
@@ -78,6 +80,8 @@ data class UiState(
     val weekLabels: List<String> = emptyList(),
     val rows: List<AppRow> = emptyList(),
     val groups: Map<AppCategory, GroupInfo> = emptyMap(),
+    /** Gün (yyyyMMdd) -> o günün limit karnesi; takvim ve rozetler için. */
+    val calendar: Map<String, DayRecord> = emptyMap(),
 )
 
 /**
@@ -147,6 +151,7 @@ fun UiState.withData(apps: List<RawApp>, rules: RuleSet, weekLabels: List<String
 class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val store = LimitStore(app)
     private val batteryStore = BatteryStore(app)
+    private val historyStore = HistoryStore(app)
     private val roles = RoleStore(app)
     private val _state = MutableStateFlow(UiState(defaultLimitMin = store.defaultLimitMin))
     val state: StateFlow<UiState> = _state.asStateFlow()
@@ -167,6 +172,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 batteryOk = Permissions.ignoresBatteryOptimizations(context),
                 monitoring = store.monitoringEnabled,
                 defaultLimitMin = store.defaultLimitMin,
+                calendar = historyStore.all(),
                 charging = (context.getSystemService(Context.BATTERY_SERVICE) as BatteryManager).isCharging,
             )
             if (!hasAccess) {

@@ -41,6 +41,7 @@ import kotlinx.coroutines.cancel
 import com.hamurcuabi.usagelimit.data.AppCategory
 import com.hamurcuabi.usagelimit.data.Apps
 import com.hamurcuabi.usagelimit.data.BatteryStore
+import com.hamurcuabi.usagelimit.data.HistoryStore
 import com.hamurcuabi.usagelimit.data.LimitStore
 import com.hamurcuabi.usagelimit.data.Permissions
 import com.hamurcuabi.usagelimit.data.Time
@@ -55,6 +56,8 @@ class MonitorService : Service() {
     private val handler = Handler(Looper.getMainLooper())
     private lateinit var store: LimitStore
     private lateinit var batteryStore: BatteryStore
+    private lateinit var historyStore: HistoryStore
+    private var activeDay: String? = null
     private lateinit var batteryManager: BatteryManager
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -102,6 +105,7 @@ class MonitorService : Service() {
         super.onCreate()
         store = LimitStore(this)
         batteryStore = BatteryStore(this)
+        historyStore = HistoryStore(this)
         batteryManager = getSystemService(Context.BATTERY_SERVICE) as BatteryManager
         powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
         windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
@@ -222,6 +226,14 @@ class MonitorService : Service() {
         val pkg = snapshot.foreground
         sampleBattery(pkg, now)
         childSync?.tick(now)
+
+        // Takvim için: izlemenin bugün çalıştığını bir kez kaydet.
+        val todayKey = Time.dayKey(now)
+        if (todayKey != activeDay) {
+            historyStore.markActive(todayKey)
+            historyStore.prune(now)
+            activeDay = todayKey
+        }
         if (pkg == null || pkg == packageName || store.isUnlimited(pkg, defaultExempt)) {
             hideOverlay()
             return
@@ -296,6 +308,7 @@ class MonitorService : Service() {
             // Ebeveyn için: limitin dolduğunu günde bir kez kaydet.
             if (info != null && !store.wasWarned("reached:" + exceededKeys.first(), day)) {
                 store.markWarned("reached:" + exceededKeys.first(), day)
+                historyStore.addReached(day)
                 childSync?.logEvent(
                     ChildSync.EVENT_LIMIT_REACHED, info.pkg, info.label, info.scope,
                     info.groupTitle, info.usedMs, info.limitMin,
@@ -361,6 +374,7 @@ class MonitorService : Service() {
             onExtend = {
                 // Dolmuş bütün limitlere birlikte ek süre ver ki uyarı ikinci kez çıkmasın.
                 extensionKeys.forEach { store.addExtension(it, day) }
+                historyStore.addExtension(day)
                 if (event != null) {
                     childSync?.logEvent(
                         ChildSync.EVENT_EXTENSION, event.pkg, event.label, event.scope,

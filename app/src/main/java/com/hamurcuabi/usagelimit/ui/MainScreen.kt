@@ -235,6 +235,18 @@ fun Dashboard(
                         }
                     }
 
+                    item(key = "achievements") {
+                        Spacer(Modifier.height(12.dp))
+                        AchievementsCard(
+                            calendar = state.calendar,
+                            emptyHint = when {
+                                mode == DashboardMode.REMOTE -> "Çocuğun telefonundan veri gelince dolmaya başlar"
+                                !state.monitoring -> "İzlemeyi açınca günler takvime işlenir"
+                                else -> "Bugünden itibaren her gün takvime işlenir"
+                            },
+                        )
+                    }
+
                     item(key = "battery") {
                         Spacer(Modifier.height(12.dp))
                         BatteryCard(state) { editingPkg = it }

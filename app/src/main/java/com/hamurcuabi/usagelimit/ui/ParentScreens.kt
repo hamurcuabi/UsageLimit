@@ -379,6 +379,7 @@ private fun ParentChildScreen(child: Child, onBack: () -> Unit) {
             canNotify = true,
             batteryOk = true,
             monitoring = true,
+            calendar = data?.calendar ?: emptyMap(),
         ).withData(
             apps = data?.apps ?: emptyList(),
             rules = rules,

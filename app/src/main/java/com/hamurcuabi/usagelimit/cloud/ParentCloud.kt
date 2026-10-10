@@ -13,6 +13,7 @@ import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.Query
 import com.google.firebase.firestore.SetOptions
 import com.google.firebase.messaging.FirebaseMessaging
+import com.hamurcuabi.usagelimit.data.DayRecord
 import com.hamurcuabi.usagelimit.data.RawApp
 import com.hamurcuabi.usagelimit.data.RuleSet
 import kotlinx.coroutines.channels.awaitClose
@@ -38,6 +39,7 @@ data class ChildSnapshot(
     val updatedAt: Long = 0L,
     val weekLabels: List<String> = emptyList(),
     val apps: List<RawApp> = emptyList(),
+    val calendar: Map<String, DayRecord> = emptyMap(),
 )
 
 data class ChildEvent(
@@ -227,12 +229,23 @@ object ParentCloud {
         val registration = Cloud.snapshot(childId).addSnapshotListener { doc, _ ->
             if (doc == null) return@addSnapshotListener
             val apps = (doc.get("apps") as? List<*>)?.mapNotNull { item -> (item as? Map<*, *>)?.let { RawApp.fromMap(it) } }
+            val calendar = HashMap<String, DayRecord>()
+            (doc.get("calendar") as? Map<*, *>)?.forEach { (day, value) ->
+                val counts = value as? List<*>
+                if (day is String && counts != null) {
+                    calendar[day] = DayRecord(
+                        reached = (counts.getOrNull(0) as? Number)?.toInt() ?: 0,
+                        extensions = (counts.getOrNull(1) as? Number)?.toInt() ?: 0,
+                    )
+                }
+            }
             trySend(
                 ChildSnapshot(
                     day = doc.getString("day") ?: "",
                     updatedAt = doc.getLong("updatedAt") ?: 0L,
                     weekLabels = (doc.get("weekLabels") as? List<*>)?.filterIsInstance<String>() ?: emptyList(),
                     apps = apps ?: emptyList(),
+                    calendar = calendar,
                 )
             )
         }

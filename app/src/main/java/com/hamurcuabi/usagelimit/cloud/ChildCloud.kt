@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.Build
 import com.google.firebase.firestore.ListenerRegistration
 import com.hamurcuabi.usagelimit.data.BatteryStore
+import com.hamurcuabi.usagelimit.data.HistoryStore
 import com.hamurcuabi.usagelimit.data.LimitStore
 import com.hamurcuabi.usagelimit.data.Permissions
 import com.hamurcuabi.usagelimit.data.Role
@@ -113,6 +114,8 @@ class ChildSync(
                 "updatedAt" to now,
                 "weekLabels" to UsageCollector.dayLabels(now),
                 "apps" to apps.map { it.toMap() },
+                // Takvim: gün -> [dolan limit sayısı, alınan ek süre sayısı]
+                "calendar" to HistoryStore(context).all().mapValues { listOf(it.value.reached, it.value.extensions) },
             )
         )
         Cloud.child(childId).update(
