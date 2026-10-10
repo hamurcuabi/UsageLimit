@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "758010366466",
+    "project_id": "usagelimit-c222b",
+    "storage_bucket": "usagelimit-c222b.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:758010366466:android:9825667a3ff6a0f07a751b",
+        "android_client_info": {
+          "package_name": "com.hamurcuabi.usagelimit"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyB1RfW2g359GhmgPESwZwbVwy8Niy9Ws_A"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
