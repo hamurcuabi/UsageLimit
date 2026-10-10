@@ -6,19 +6,20 @@ import android.os.BatteryManager
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.hamurcuabi.usagelimit.data.AppCategory
-import com.hamurcuabi.usagelimit.data.Apps
 import com.hamurcuabi.usagelimit.data.BatteryStore
 import com.hamurcuabi.usagelimit.data.LimitStore
 import com.hamurcuabi.usagelimit.data.Permissions
+import com.hamurcuabi.usagelimit.data.RawApp
+import com.hamurcuabi.usagelimit.data.RoleStore
+import com.hamurcuabi.usagelimit.data.RuleSet
 import com.hamurcuabi.usagelimit.data.Time
-import com.hamurcuabi.usagelimit.data.UsageReader
+import com.hamurcuabi.usagelimit.data.UsageCollector
 import com.hamurcuabi.usagelimit.service.MonitorService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import java.util.Calendar
 
 data class AppRow(
     val pkg: String,
@@ -65,6 +66,8 @@ data class UiState(
     val batteryOk: Boolean = false,
     val monitoring: Boolean = false,
     val defaultLimitMin: Int = 30,
+    val maxExtensions: Int = LimitStore.DEFAULT_MAX_EXTENSIONS,
+    val extensionMin: Int = LimitStore.DEFAULT_EXTENSION_MIN,
     val totalTodayMs: Long = 0,
     val avgPerAppMs: Long = 0,
     val usedAppCount: Int = 0,
@@ -77,9 +80,74 @@ data class UiState(
     val groups: Map<AppCategory, GroupInfo> = emptyMap(),
 )
 
+/**
+ * Ham kullanım verisini kurallarla birleştirip ekranın göstereceği hâle getirir.
+ * Hem bu telefonun verisi hem de ebeveynin uzaktan gördüğü çocuk verisi için kullanılır.
+ */
+fun UiState.withData(apps: List<RawApp>, rules: RuleSet, weekLabels: List<String>): UiState {
+    val base = apps.map { app ->
+        AppRow(
+            pkg = app.pkg,
+            label = app.label,
+            category = app.category,
+            todayMs = app.todayMs,
+            sessionsToday = app.sessionsToday,
+            dailyAvgMs = app.dailyAvgMs,
+            avgSessionMs = app.avgSessionMs,
+            limitMin = rules.limitMinutes(app.pkg, app.exempt, app.category.name),
+            rule = rules.rule(app.pkg),
+            week = app.week,
+            unlimited = rules.isUnlimited(app.pkg, app.exempt),
+            batteryTodayPct = app.batteryTodayPct,
+            batteryWeekPct = app.batteryWeekPct,
+        )
+    }
+
+    val groups = AppCategory.entries.associateWith { category ->
+        GroupInfo(
+            limitMin = rules.groupLimit(category.name),
+            countedMs = base.filter { it.category == category && !it.unlimited }.sumOf { it.todayMs },
+        )
+    }
+
+    val rows = base
+        .map { row ->
+            val group = groups.getValue(row.category)
+            val inGroup = !row.unlimited && group.limitMin != null
+            val ownExceeded = row.limitMs?.let { row.todayMs >= it } ?: false
+            row.copy(
+                groupLimited = inGroup && row.limitMin == null,
+                exceeded = ownExceeded || (inGroup && group.exceeded && row.todayMs > 0),
+            )
+        }
+        .sortedWith(
+            compareByDescending<AppRow> { it.todayMs }
+                .thenByDescending { it.dailyAvgMs }
+                .thenBy { it.label.lowercase() }
+        )
+
+    val used = rows.count { it.todayMs > 0 }
+    val total = rows.sumOf { it.todayMs }
+    return copy(
+        defaultLimitMin = rules.defaultLimitMin,
+        maxExtensions = rules.maxExtensions,
+        extensionMin = rules.extensionMin,
+        rows = rows,
+        groups = groups,
+        totalTodayMs = total,
+        usedAppCount = used,
+        batteryTodayPct = rows.sumOf { it.batteryTodayPct.toDouble() }.toFloat(),
+        avgPerAppMs = if (used > 0) total / used else 0L,
+        weekTotals = List(UsageCollector.CHART_DAYS) { i -> rows.sumOf { it.week.getOrElse(i) { 0L } } },
+        weekLabels = weekLabels,
+    )
+}
+
+/** Bu telefonun kendi verisi: tek başına kullanımda ve çocuk modunda. */
 class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val store = LimitStore(app)
     private val batteryStore = BatteryStore(app)
+    private val roles = RoleStore(app)
     private val _state = MutableStateFlow(UiState(defaultLimitMin = store.defaultLimitMin))
     val state: StateFlow<UiState> = _state.asStateFlow()
 
@@ -87,6 +155,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch(Dispatchers.IO) {
             val context = getApplication<Application>()
             val hasAccess = Permissions.hasUsageAccess(context)
+
+            // Çocuğun telefonunda izleme kapatılamaz.
+            if (roles.isPairedChild && !store.monitoringEnabled) store.monitoringEnabled = true
+
             val base = _state.value.copy(
                 loading = false,
                 hasUsageAccess = hasAccess,
@@ -111,83 +183,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
 
             val now = System.currentTimeMillis()
-            val dayStart = Time.startOfDay(now)
-            val today = UsageReader.read(context, dayStart, now).perApp
-            val weekEvents = UsageReader.read(context, dayStart - 6 * Time.DAY_MS, now).perApp
-            val history = UsageReader.dailyHistory(context, HISTORY_DAYS)
-
-            val batteryToday = batteryStore.day(Time.dayKey(now))
-            val batteryWeek = HashMap<String, Float>()
-            for (i in 0 until CHART_DAYS) {
-                for ((pkg, pct) in batteryStore.day(Time.dayKey(now - i * Time.DAY_MS))) {
-                    batteryWeek[pkg] = (batteryWeek[pkg] ?: 0f) + pct
-                }
-            }
-
-            val exempt = Apps.defaultExempt(context)
-            // Kurulu ve başlatılabilir bütün uygulamalar listelenir; kullanılmayanlar da dahil.
-            val packages = Apps.launchable(context) - Apps.hidden(context)
-
-            val base0 = packages.map { pkg ->
-                val t = today[pkg]
-                val w = weekEvents[pkg]
-                val past = history.map { it[pkg] ?: 0L }
-                val todayMs = t?.totalMs ?: 0L
-                val category = AppCategory.of(context, pkg)
-                val unlimited = store.isUnlimited(pkg, exempt)
-                val limitMin = store.limitMinutes(pkg, exempt, category.name)
-                AppRow(
-                    pkg = pkg,
-                    label = Apps.label(context, pkg),
-                    category = category,
-                    todayMs = todayMs,
-                    sessionsToday = if (todayMs > 0) t?.sessions ?: 0 else 0,
-                    dailyAvgMs = past.sum() / HISTORY_DAYS,
-                    avgSessionMs = if (w != null && w.sessions > 0) w.totalMs / w.sessions else 0L,
-                    limitMin = limitMin,
-                    rule = store.rule(pkg),
-                    week = past.takeLast(CHART_DAYS - 1) + todayMs,
-                    unlimited = unlimited,
-                    batteryTodayPct = batteryToday[pkg] ?: 0f,
-                    batteryWeekPct = batteryWeek[pkg] ?: 0f,
-                )
-            }
-
-            val groups = AppCategory.entries.associateWith { category ->
-                GroupInfo(
-                    limitMin = store.groupLimit(category.name),
-                    countedMs = base0.filter { it.category == category && !it.unlimited }.sumOf { it.todayMs },
-                )
-            }
-
-            val rows = base0
-                .map { row ->
-                    val group = groups.getValue(row.category)
-                    val inGroup = !row.unlimited && group.limitMin != null
-                    val ownExceeded = row.limitMs?.let { row.todayMs >= it } ?: false
-                    row.copy(
-                        groupLimited = inGroup && row.limitMin == null,
-                        exceeded = ownExceeded || (inGroup && group.exceeded && row.todayMs > 0),
-                    )
-                }
-                .sortedWith(
-                    compareByDescending<AppRow> { it.todayMs }
-                        .thenByDescending { it.dailyAvgMs }
-                        .thenBy { it.label.lowercase() }
-                )
-
-            val used = rows.count { it.todayMs > 0 }
-            val total = rows.sumOf { it.todayMs }
-            _state.value = base.copy(
-                rows = rows,
-                groups = groups,
-                totalTodayMs = total,
-                usedAppCount = used,
-                batteryTodayPct = rows.sumOf { it.batteryTodayPct.toDouble() }.toFloat(),
-                avgPerAppMs = if (used > 0) total / used else 0L,
-                weekTotals = List(CHART_DAYS) { i -> rows.sumOf { it.week[i] } },
-                weekLabels = dayLabels(now),
-            )
+            val apps = UsageCollector.collect(context, batteryStore, now)
+            _state.value = base.withData(apps, store.rules(), UsageCollector.dayLabels(now))
         }
     }
 
@@ -206,6 +203,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         refresh()
     }
 
+    fun changeMaxExtensions(delta: Int) {
+        store.maxExtensions = store.maxExtensions + delta
+        refresh()
+    }
+
     fun setMonitoring(enabled: Boolean) {
         store.monitoringEnabled = enabled
         val context = getApplication<Application>()
@@ -214,19 +216,5 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         } catch (_: Exception) {
         }
         _state.value = _state.value.copy(monitoring = enabled)
-    }
-
-    private fun dayLabels(now: Long): List<String> {
-        val names = listOf("Paz", "Pzt", "Sal", "Çar", "Per", "Cum", "Cmt")
-        val c = Calendar.getInstance()
-        return List(CHART_DAYS) { i ->
-            c.timeInMillis = now - (CHART_DAYS - 1 - i) * Time.DAY_MS
-            names[c.get(Calendar.DAY_OF_WEEK) - 1]
-        }
-    }
-
-    companion object {
-        private const val HISTORY_DAYS = 7
-        const val CHART_DAYS = 7
     }
 }

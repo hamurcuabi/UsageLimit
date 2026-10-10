@@ -31,6 +31,13 @@ import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.hamurcuabi.usagelimit.MainActivity
 import com.hamurcuabi.usagelimit.R
+import com.hamurcuabi.usagelimit.cloud.ChildSync
+import com.hamurcuabi.usagelimit.cloud.Cloud
+import com.hamurcuabi.usagelimit.data.RoleStore
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import com.hamurcuabi.usagelimit.data.AppCategory
 import com.hamurcuabi.usagelimit.data.Apps
 import com.hamurcuabi.usagelimit.data.BatteryStore
@@ -49,6 +56,9 @@ class MonitorService : Service() {
     private lateinit var store: LimitStore
     private lateinit var batteryStore: BatteryStore
     private lateinit var batteryManager: BatteryManager
+
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var childSync: ChildSync? = null
 
     private var prevBatteryPkg: String? = null
     private var prevCharge = -1L
@@ -106,7 +116,24 @@ class MonitorService : Service() {
         }
     }
 
+    /** Çocuk modunda eşleşme tamamlandıysa bulut eşitlemesini başlatır (tekrar çağrılabilir). */
+    private fun ensureChildSync() {
+        if (childSync != null) return
+        val roles = RoleStore(this)
+        val childId = roles.childId
+        if (!roles.isPairedChild || childId == null || !Cloud.isAvailable(this)) return
+        try {
+            childSync = ChildSync(this, childId, store, batteryStore, scope).also {
+                it.start()
+                it.tick(System.currentTimeMillis(), force = true)
+            }
+        } catch (_: Exception) {
+            childSync = null
+        }
+    }
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        ensureChildSync()
         handler.removeCallbacks(ticker)
         handler.post(ticker)
         return START_STICKY
@@ -114,6 +141,8 @@ class MonitorService : Service() {
 
     override fun onDestroy() {
         handler.removeCallbacks(ticker)
+        childSync?.stop()
+        scope.cancel()
         flushBattery(System.currentTimeMillis())
         hideOverlay()
         super.onDestroy()
@@ -192,6 +221,7 @@ class MonitorService : Service() {
         val snapshot = UsageReader.read(this, Time.startOfDay(now), now)
         val pkg = snapshot.foreground
         sampleBattery(pkg, now)
+        childSync?.tick(now)
         if (pkg == null || pkg == packageName || store.isUnlimited(pkg, defaultExempt)) {
             hideOverlay()
             return
@@ -215,18 +245,20 @@ class MonitorService : Service() {
         var maxExtensions = 0
         var title = ""
         var body = ""
+        var event: LimitEvent? = null
 
         // 1) Uygulamanın kendi limiti
         val limitMin = store.limitMinutes(pkg, defaultExempt, category.name)
         var ownAllowedMs = 0L
         if (limitMin != null) {
             val extensions = store.extensionsUsed(pkg, day)
-            ownAllowedMs = (limitMin + extensions * LimitStore.EXTENSION_MIN) * Time.MINUTE_MS
+            ownAllowedMs = (limitMin + extensions * store.extensionMin) * Time.MINUTE_MS
             if (usedMs >= ownAllowedMs) {
                 exceededKeys += pkg
                 maxExtensions = maxOf(maxExtensions, extensions)
                 title = "$label için bugünlük süre doldu"
                 body = "Bugün ${Time.format(usedMs)} kullandın. Günlük limitin $limitMin dk."
+                event = LimitEvent(pkg, label, ChildSync.SCOPE_APP, null, usedMs, limitMin)
             }
         }
 
@@ -242,7 +274,7 @@ class MonitorService : Service() {
                 groupUsedMs += usage.totalMs
             }
             val extensions = store.extensionsUsed(groupKey, day)
-            groupAllowedMs = (groupMin + extensions * LimitStore.EXTENSION_MIN) * Time.MINUTE_MS
+            groupAllowedMs = (groupMin + extensions * store.extensionMin) * Time.MINUTE_MS
             if (groupUsedMs >= groupAllowedMs) {
                 val groupBody = "\"${category.title}\" grubunda bugün toplam ${Time.format(groupUsedMs)} geçirdin. Grup limiti $groupMin dk."
                 if (exceededKeys.isEmpty()) {
@@ -253,11 +285,23 @@ class MonitorService : Service() {
                 }
                 exceededKeys += groupKey
                 maxExtensions = maxOf(maxExtensions, extensions)
+                if (event == null) {
+                    event = LimitEvent(pkg, label, ChildSync.SCOPE_GROUP, category.title, groupUsedMs, groupMin)
+                }
             }
         }
 
         if (exceededKeys.isNotEmpty()) {
-            showLimitReached(pkg, title, body, exceededKeys, maxExtensions, day)
+            val info = event
+            // Ebeveyn için: limitin dolduğunu günde bir kez kaydet.
+            if (info != null && !store.wasWarned("reached:" + exceededKeys.first(), day)) {
+                store.markWarned("reached:" + exceededKeys.first(), day)
+                childSync?.logEvent(
+                    ChildSync.EVENT_LIMIT_REACHED, info.pkg, info.label, info.scope,
+                    info.groupTitle, info.usedMs, info.limitMin,
+                )
+            }
+            showLimitReached(pkg, title, body, exceededKeys, maxExtensions, day, info)
             return
         }
 
@@ -288,6 +332,7 @@ class MonitorService : Service() {
         extensionKeys: List<String>,
         extensions: Int,
         day: String,
+        event: LimitEvent?,
     ) {
         if (overlayPkg == pkg && overlayView != null) return
         hideOverlay()
@@ -306,7 +351,7 @@ class MonitorService : Service() {
         val view = buildOverlay(
             title = title,
             body = body,
-            extensionsLeft = LimitStore.MAX_EXTENSIONS - extensions,
+            extensionsLeft = store.maxExtensions - extensions,
             onClose = {
                 closingPkg = pkg
                 closingUntil = System.currentTimeMillis() + CLOSE_GRACE_MS
@@ -316,6 +361,13 @@ class MonitorService : Service() {
             onExtend = {
                 // Dolmuş bütün limitlere birlikte ek süre ver ki uyarı ikinci kez çıkmasın.
                 extensionKeys.forEach { store.addExtension(it, day) }
+                if (event != null) {
+                    childSync?.logEvent(
+                        ChildSync.EVENT_EXTENSION, event.pkg, event.label, event.scope,
+                        event.groupTitle, event.usedMs, event.limitMin, store.extensionMin,
+                    )
+                    childSync?.tick(System.currentTimeMillis(), force = true)
+                }
                 hideOverlay()
             },
         )
@@ -390,7 +442,7 @@ class MonitorService : Service() {
 
         if (extensionsLeft > 0) {
             root.addView(Button(this).apply {
-                text = "${LimitStore.EXTENSION_MIN} dk daha (bugün $extensionsLeft hak kaldı)"
+                text = "${store.extensionMin} dk daha (bugün $extensionsLeft hak kaldı)"
                 isAllCaps = false
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
                 setOnClickListener { onExtend() }
@@ -473,6 +525,15 @@ class MonitorService : Service() {
             // Bildirim izni verilmemiş.
         }
     }
+
+    private class LimitEvent(
+        val pkg: String,
+        val label: String,
+        val scope: String,
+        val groupTitle: String?,
+        val usedMs: Long,
+        val limitMin: Int,
+    )
 
     companion object {
         private const val TICK_MS = 3_000L

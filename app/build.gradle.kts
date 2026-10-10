@@ -4,6 +4,12 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+// Firebase yapılandırması (google-services.json) varsa bulut özellikleri devreye girer.
+// Dosya yokken de proje derlenir; uygulama o durumda yalnızca tek başına kullanım sunar.
+if (file("google-services.json").exists()) {
+    apply(plugin = "com.google.gms.google-services")
+}
+
 // CI her derlemede artan bir sürüm kodu verir; böylece yeni APK eskisinin üzerine kurulur.
 val ciVersionCode = (project.findProperty("versionCode") as String?)?.toIntOrNull() ?: 1
 
@@ -64,6 +70,12 @@ dependencies {
     implementation("androidx.activity:activity-compose:1.10.1")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.9.1")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.9.1")
+
+    implementation(platform("com.google.firebase:firebase-bom:33.16.0"))
+    implementation("com.google.firebase:firebase-auth")
+    implementation("com.google.firebase:firebase-firestore")
+    implementation("com.google.firebase:firebase-messaging")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.10.2")
 
     implementation(platform("androidx.compose:compose-bom:2025.06.01"))
     implementation("androidx.compose.ui:ui")

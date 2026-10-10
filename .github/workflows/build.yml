@@ -25,6 +25,18 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
+      # GOOGLE_SERVICES_JSON secret'ı tanımlıysa Firebase yapılandırmasını derlemeye ekle.
+      - name: Firebase yapılandırmasını yaz
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+        run: |
+          if [ -n "$GOOGLE_SERVICES_JSON" ]; then
+            printf '%s' "$GOOGLE_SERVICES_JSON" > app/google-services.json
+            echo "google-services.json eklendi"
+          else
+            echo "GOOGLE_SERVICES_JSON tanımlı değil; bulut özellikleri kapalı derleniyor"
+          fi
+
       - name: APK derle
         run: ./gradlew assembleRelease -PversionCode=${{ github.run_number }} --stacktrace
 

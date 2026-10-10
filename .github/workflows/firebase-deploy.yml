@@ -1,0 +1,51 @@
+name: Firebase'e yükle
+
+# Güvenlik kurallarını ve bildirim fonksiyonunu Firebase projesine yükler.
+# FIREBASE_SERVICE_ACCOUNT secret'ı (servis hesabı JSON'ı) tanımlı değilse hiçbir şey yapmaz.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - firestore.rules
+      - firestore.indexes.json
+      - firebase.json
+      - functions/**
+      - .github/workflows/firebase-deploy.yml
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Servis hesabını hazırla
+        id: creds
+        run: |
+          if [ -z "$FIREBASE_SERVICE_ACCOUNT" ]; then
+            echo "FIREBASE_SERVICE_ACCOUNT tanımlı değil; yükleme atlanıyor"
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          printf '%s' "$FIREBASE_SERVICE_ACCOUNT" > "$RUNNER_TEMP/sa.json"
+          echo "GOOGLE_APPLICATION_CREDENTIALS=$RUNNER_TEMP/sa.json" >> "$GITHUB_ENV"
+          echo "PROJECT_ID=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['project_id'])" "$RUNNER_TEMP/sa.json")" >> "$GITHUB_ENV"
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-node@v4
+        if: steps.creds.outputs.ready == 'true'
+        with:
+          node-version: 22
+
+      - name: Güvenlik kurallarını yükle
+        if: steps.creds.outputs.ready == 'true'
+        run: npx -y firebase-tools@latest deploy --only firestore:rules --project "$PROJECT_ID" --non-interactive
+
+      - name: Bildirim fonksiyonunu yükle
+        if: steps.creds.outputs.ready == 'true'
+        run: |
+          npm --prefix functions install
+          npx -y firebase-tools@latest deploy --only functions --project "$PROJECT_ID" --non-interactive --force

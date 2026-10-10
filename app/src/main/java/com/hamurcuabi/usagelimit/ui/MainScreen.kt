@@ -28,12 +28,14 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Button
@@ -100,7 +102,7 @@ private fun formatPct(value: Float): String = when {
     else -> "%" + String.format(Locale.forLanguageTag("tr"), "%.1f", value)
 }
 
-private fun AppCategory.color(): Color = when (this) {
+internal fun AppCategory.color(): Color = when (this) {
     AppCategory.SOCIAL -> Color(0xFFE86A92)
     AppCategory.GAME -> Color(0xFF8B7CF6)
     AppCategory.MEDIA -> Color(0xFF35B3A6)
@@ -109,20 +111,71 @@ private fun AppCategory.color(): Color = when (this) {
     AppCategory.OTHER -> Color(0xFF8894A1)
 }
 
+enum class DashboardMode {
+    /** Bu telefonun verisi, limitler burada düzenlenir. */
+    LOCAL,
+
+    /** Çocuğun telefonu: veri yerel, limitler ebeveynden gelir ve değiştirilemez. */
+    CHILD,
+
+    /** Ebeveynin gördüğü çocuk verisi: uzaktan gelir, limitler düzenlenir. */
+    REMOTE,
+}
+
+class DashboardActions(
+    val refresh: () -> Unit = {},
+    val changeDefaultLimit: (Int) -> Unit = {},
+    val changeMaxExtensions: (Int) -> Unit = {},
+    val setMonitoring: (Boolean) -> Unit = {},
+    val setRule: (String, Int?) -> Unit = { _, _ -> },
+    val setGroupLimit: (AppCategory, Int?) -> Unit = { _, _ -> },
+)
+
+/** Bu telefonun kendi kullanım ekranı (tek başına kullanım ve çocuk modu). */
 @Composable
-fun MainScreen(vm: MainViewModel = viewModel()) {
+fun LocalDashboard(
+    mode: DashboardMode,
+    title: String = "Kullanım Limiti",
+    extraBottom: LazyListScope.() -> Unit = {},
+    vm: MainViewModel = viewModel(),
+) {
     val state by vm.state.collectAsStateWithLifecycle()
+    val actions = remember(vm) {
+        DashboardActions(
+            refresh = vm::refresh,
+            changeDefaultLimit = vm::changeDefaultLimit,
+            changeMaxExtensions = vm::changeMaxExtensions,
+            setMonitoring = vm::setMonitoring,
+            setRule = vm::setRule,
+            setGroupLimit = vm::setGroupLimit,
+        )
+    }
+    Dashboard(state = state, actions = actions, mode = mode, title = title, extraBottom = extraBottom)
+}
+
+@Composable
+fun Dashboard(
+    state: UiState,
+    actions: DashboardActions,
+    mode: DashboardMode,
+    title: String = "Kullanım Limiti",
+    onBack: (() -> Unit)? = null,
+    extraTop: LazyListScope.() -> Unit = {},
+    extraBottom: LazyListScope.() -> Unit = {},
+) {
     val context = LocalContext.current
+    val local = mode != DashboardMode.REMOTE
+    val editable = mode != DashboardMode.CHILD
     var editingPkg by rememberSaveable { mutableStateOf<String?>(null) }
     var editingGroup by rememberSaveable { mutableStateOf<String?>(null) }
     var query by rememberSaveable { mutableStateOf("") }
     var expanded by remember { mutableStateOf(emptySet<AppCategory>()) }
 
-    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { vm.refresh() }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { actions.refresh() }
 
     val notificationPermission = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
-    ) { vm.refresh() }
+    ) { actions.refresh() }
 
     Scaffold(containerColor = MaterialTheme.colorScheme.background) { padding ->
         when {
@@ -133,7 +186,7 @@ fun MainScreen(vm: MainViewModel = viewModel()) {
                 contentAlignment = Alignment.Center,
             ) { CircularProgressIndicator() }
 
-            !state.hasUsageAccess -> UsageAccessPrompt(Modifier.padding(padding)) {
+            local && !state.hasUsageAccess -> UsageAccessPrompt(Modifier.padding(padding)) {
                 context.open(Settings.ACTION_USAGE_ACCESS_SETTINGS, withPackage = false)
             }
 
@@ -158,10 +211,11 @@ fun MainScreen(vm: MainViewModel = viewModel()) {
                         .padding(padding),
                     contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 32.dp),
                 ) {
-                    item(key = "header") { Header() }
+                    item(key = "header") { Header(title, onBack) }
                     item(key = "hero") { HeroCard(state, groups) }
+                    extraTop()
 
-                    if (!state.canOverlay || !state.canNotify || !state.batteryOk) {
+                    if (local && (!state.canOverlay || !state.canNotify || !state.batteryOk)) {
                         item(key = "permissions") {
                             Spacer(Modifier.height(12.dp))
                             PermissionsCard(
@@ -190,12 +244,13 @@ fun MainScreen(vm: MainViewModel = viewModel()) {
                         Spacer(Modifier.height(12.dp))
                         ControlCard(
                             state = state,
-                            onChange = vm::changeDefaultLimit,
+                            mode = mode,
+                            actions = actions,
                             onToggle = { enabled ->
                                 if (enabled && !state.canNotify && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                                     notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
                                 }
-                                vm.setMonitoring(enabled)
+                                actions.setMonitoring(enabled)
                             },
                         )
                     }
@@ -240,7 +295,8 @@ fun MainScreen(vm: MainViewModel = viewModel()) {
                                     rows = rows,
                                     usedCount = used.size,
                                     info = state.groups[category],
-                                    onClick = { editingGroup = category.name },
+                                    editable = editable,
+                                    onClick = { if (editable) editingGroup = category.name },
                                 )
                             }
                             items(visible, key = { it.pkg }) { row ->
@@ -263,6 +319,7 @@ fun MainScreen(vm: MainViewModel = viewModel()) {
                             }
                         }
                     }
+                    extraBottom()
                 }
             }
         }
@@ -280,7 +337,7 @@ fun MainScreen(vm: MainViewModel = viewModel()) {
                 info = state.groups[group] ?: GroupInfo(null, 0L),
                 appCount = state.rows.count { it.category == group },
                 defaultLimitMin = state.defaultLimitMin,
-                onLimit = { vm.setGroupLimit(group, it) },
+                onLimit = { actions.setGroupLimit(group, it) },
             )
         }
     }
@@ -296,25 +353,36 @@ fun MainScreen(vm: MainViewModel = viewModel()) {
                 row = editing,
                 labels = state.weekLabels,
                 defaultLimitMin = state.defaultLimitMin,
-                onRule = { vm.setRule(editing.pkg, it) },
+                editable = editable,
+                onRule = { actions.setRule(editing.pkg, it) },
             )
         }
     }
 }
 
 @Composable
-private fun Header() {
+private fun Header(title: String, onBack: (() -> Unit)?) {
     val date = remember {
         SimpleDateFormat("d MMMM EEEE", Locale.forLanguageTag("tr")).format(Date())
     }
-    Column(Modifier.padding(start = 4.dp, top = 8.dp, bottom = 16.dp)) {
-        Text(
-            "Kullanım Limiti",
-            style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.primary,
-            fontWeight = FontWeight.SemiBold,
-        )
-        Text(date, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
+    Row(
+        Modifier.padding(top = 8.dp, bottom = 16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (onBack != null) {
+            IconButton(onClick = onBack) {
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Geri")
+            }
+        }
+        Column(Modifier.padding(start = 4.dp)) {
+            Text(
+                title,
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.primary,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(date, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
+        }
     }
 }
 
@@ -485,7 +553,7 @@ private fun BatteryCard(state: UiState, onApp: (String) -> Unit) {
                             .padding(horizontal = 20.dp, vertical = 7.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        AppIcon(row.pkg, 28.dp)
+                        AppIcon(row.pkg, row.label, 28.dp)
                         Spacer(Modifier.width(12.dp))
                         Column(Modifier.weight(1f)) {
                             Text(
@@ -514,44 +582,98 @@ private fun BatteryCard(state: UiState, onApp: (String) -> Unit) {
 }
 
 @Composable
-private fun ControlCard(state: UiState, onChange: (Int) -> Unit, onToggle: (Boolean) -> Unit) {
+private fun ControlCard(
+    state: UiState,
+    mode: DashboardMode,
+    actions: DashboardActions,
+    onToggle: (Boolean) -> Unit,
+) {
+    val scheme = MaterialTheme.colorScheme
+    val rowPadding = Modifier.padding(horizontal = 20.dp, vertical = 14.dp)
     Surface(
         shape = MaterialTheme.shapes.large,
-        color = MaterialTheme.colorScheme.surfaceContainer,
+        color = scheme.surfaceContainer,
         modifier = Modifier.fillMaxWidth(),
     ) {
         Column {
-            Row(
-                Modifier.padding(horizontal = 20.dp, vertical = 14.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text("İzleme", style = MaterialTheme.typography.titleMedium)
-                    Text(
-                        if (state.monitoring) "Limit dolunca uyarı çıkar" else "Kapalı, sadece istatistik",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+            if (mode == DashboardMode.LOCAL) {
+                Row(rowPadding, verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("İzleme", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            if (state.monitoring) "Limit dolunca uyarı çıkar" else "Kapalı, sadece istatistik",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = scheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(checked = state.monitoring, onCheckedChange = onToggle)
                 }
-                Switch(checked = state.monitoring, onCheckedChange = onToggle)
+                HorizontalDivider(color = scheme.outlineVariant)
             }
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-            Row(
-                Modifier.padding(horizontal = 20.dp, vertical = 14.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
+
+            Row(rowPadding, verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text("Varsayılan limit", style = MaterialTheme.typography.titleMedium)
                     Text(
                         "Uygulama başına, günlük",
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = scheme.onSurfaceVariant,
                     )
                 }
-                MinuteStepper(
-                    minutes = state.defaultLimitMin,
-                    onMinus = { onChange(-LimitStore.STEP) },
-                    onPlus = { onChange(LimitStore.STEP) },
+                if (mode == DashboardMode.CHILD) {
+                    Text(
+                        "${state.defaultLimitMin} dk",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                } else {
+                    MinuteStepper(
+                        minutes = state.defaultLimitMin,
+                        onMinus = { actions.changeDefaultLimit(-LimitStore.STEP) },
+                        onPlus = { actions.changeDefaultLimit(LimitStore.STEP) },
+                    )
+                }
+            }
+
+            HorizontalDivider(color = scheme.outlineVariant)
+            Row(rowPadding, verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Ek süre hakkı", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "Limit dolunca günde kaç kez ${state.extensionMin} dk alınabilir",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = scheme.onSurfaceVariant,
+                    )
+                }
+                if (mode == DashboardMode.CHILD) {
+                    Text(
+                        "${state.maxExtensions}",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                } else {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        StepButton("−", enabled = state.maxExtensions > 0) { actions.changeMaxExtensions(-1) }
+                        Text(
+                            "${state.maxExtensions}",
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.padding(horizontal = 18.dp),
+                        )
+                        StepButton("+", enabled = state.maxExtensions < LimitStore.MAX_EXTENSIONS_CAP) {
+                            actions.changeMaxExtensions(1)
+                        }
+                    }
+                }
+            }
+
+            if (mode == DashboardMode.CHILD) {
+                HorizontalDivider(color = scheme.outlineVariant)
+                Text(
+                    "Limitleri ebeveynin belirliyor; bu telefondan değiştirilemez.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = scheme.onSurfaceVariant,
+                    modifier = rowPadding,
                 )
             }
         }
@@ -642,6 +764,7 @@ private fun GroupHeader(
     rows: List<AppRow>,
     usedCount: Int,
     info: GroupInfo?,
+    editable: Boolean,
     onClick: () -> Unit,
 ) {
     val scheme = MaterialTheme.colorScheme
@@ -680,9 +803,13 @@ private fun GroupHeader(
                     color = if (exceeded) scheme.error else scheme.onSurface,
                 )
                 Text(
-                    if (limitMin != null) "/ $limitMin dk" else "Grup limiti koy",
+                    when {
+                        limitMin != null -> "/ $limitMin dk"
+                        editable -> "Grup limiti koy"
+                        else -> "grup limiti yok"
+                    },
                     style = MaterialTheme.typography.labelSmall,
-                    color = if (limitMin != null) scheme.onSurfaceVariant else scheme.primary,
+                    color = if (limitMin == null && editable) scheme.primary else scheme.onSurfaceVariant,
                 )
             }
         }
@@ -816,7 +943,7 @@ private fun AppRowItem(row: AppRow, onClick: () -> Unit, modifier: Modifier = Mo
             .padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        AppIcon(row.pkg, 40.dp)
+        AppIcon(row.pkg, row.label, 40.dp)
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Text(
@@ -898,7 +1025,7 @@ private object IconCache {
 }
 
 @Composable
-private fun AppIcon(pkg: String, size: Dp) {
+private fun AppIcon(pkg: String, label: String, size: Dp) {
     val context = LocalContext.current.applicationContext
     val bitmap by produceState(IconCache.peek(pkg), pkg) {
         if (value == null) {
@@ -909,12 +1036,20 @@ private fun AppIcon(pkg: String, size: Dp) {
     if (current != null) {
         Image(bitmap = current, contentDescription = null, modifier = Modifier.size(size))
     } else {
+        // Uygulama bu telefonda kurulu değilse (ebeveyn görünümü) baş harfini göster.
         Box(
             Modifier
                 .size(size)
                 .clip(RoundedCornerShape(12.dp))
-                .background(MaterialTheme.colorScheme.surfaceContainerHighest)
-        )
+                .background(MaterialTheme.colorScheme.surfaceContainerHighest),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                label.trim().take(1).uppercase(),
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }
 
@@ -923,6 +1058,7 @@ private fun AppDetail(
     row: AppRow,
     labels: List<String>,
     defaultLimitMin: Int,
+    editable: Boolean,
     onRule: (Int?) -> Unit,
 ) {
     val scheme = MaterialTheme.colorScheme
@@ -933,7 +1069,7 @@ private fun AppDetail(
             .padding(start = 20.dp, end = 20.dp, bottom = 32.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            AppIcon(row.pkg, 52.dp)
+            AppIcon(row.pkg, row.label, 52.dp)
             Spacer(Modifier.width(14.dp))
             Column {
                 Text(
@@ -982,6 +1118,31 @@ private fun AppDetail(
         Text("Günlük limit", style = MaterialTheme.typography.titleSmall)
         Spacer(Modifier.height(10.dp))
 
+        if (editable) {
+            AppLimitEditor(row, defaultLimitMin, onRule)
+        } else {
+            Text(
+                when {
+                    row.limitMin != null -> "Günlük limit: ${row.limitMin} dk"
+                    row.groupLimited -> "\"${row.category.title}\" grubunun toplam limitine tabi."
+                    else -> "Bu uygulama için limit yok."
+                },
+                style = MaterialTheme.typography.bodyLarge,
+            )
+            Text(
+                "Limitleri ebeveynin belirliyor.",
+                style = MaterialTheme.typography.bodySmall,
+                color = scheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 4.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun AppLimitEditor(row: AppRow, defaultLimitMin: Int, onRule: (Int?) -> Unit) {
+    val scheme = MaterialTheme.colorScheme
+    Column {
         val mode = when {
             row.rule == null -> 0
             row.rule > 0 -> 1

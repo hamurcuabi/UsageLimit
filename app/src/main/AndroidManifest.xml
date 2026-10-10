@@ -41,6 +41,15 @@
                 android:value="Kullanıcının belirlediği günlük uygulama süre limitlerini izler ve limit dolunca uyarır." />
         </service>
 
+        <!-- Ebeveynin telefonuna gelen olay bildirimleri -->
+        <service
+            android:name=".cloud.PushService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+
         <receiver
             android:name=".service.BootReceiver"
             android:exported="true">
