@@ -42,10 +42,20 @@ jobs:
 
       - name: Güvenlik kurallarını yükle
         if: steps.creds.outputs.ready == 'true'
-        run: npx -y firebase-tools@latest deploy --only firestore:rules --project "$PROJECT_ID" --non-interactive
+        run: |
+          set -o pipefail
+          npx -y firebase-tools@latest deploy --only firestore:rules --project "$PROJECT_ID" --non-interactive 2>&1 | tee "$RUNNER_TEMP/rules.log" || {
+            # Hata metnini çalıştırma özetinde görünür kıl.
+            echo "::error title=Kurallar yüklenemedi::$(tail -n 25 "$RUNNER_TEMP/rules.log" | tr '\n' ' ' | cut -c1-3000)"
+            exit 1
+          }
 
       - name: Bildirim fonksiyonunu yükle
-        if: steps.creds.outputs.ready == 'true'
+        if: always() && steps.creds.outputs.ready == 'true'
         run: |
+          set -o pipefail
           npm --prefix functions install
-          npx -y firebase-tools@latest deploy --only functions --project "$PROJECT_ID" --non-interactive --force
+          npx -y firebase-tools@latest deploy --only functions --project "$PROJECT_ID" --non-interactive --force 2>&1 | tee "$RUNNER_TEMP/functions.log" || {
+            echo "::error title=Fonksiyon yüklenemedi::$(tail -n 30 "$RUNNER_TEMP/functions.log" | tr '\n' ' ' | cut -c1-3000)"
+            exit 1
+          }
