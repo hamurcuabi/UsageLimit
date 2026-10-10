@@ -12,7 +12,20 @@
           "package_name": "com.hamurcuabi.usagelimit"
         }
       },
-      "oauth_client": [],
+      "oauth_client": [
+        {
+          "client_id": "758010366466-oo902dm63itha8h8kftsjfb6hbt5cnd9.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.hamurcuabi.usagelimit",
+            "certificate_hash": "f54e19d16739519970551678f1ee627ffc74111f"
+          }
+        },
+        {
+          "client_id": "758010366466-gl3t84gee5opqg8jue4odb9g363hri2q.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
       "api_key": [
         {
           "current_key": "AIzaSyB1RfW2g359GhmgPESwZwbVwy8Niy9Ws_A"
@@ -20,7 +33,12 @@
       ],
       "services": {
         "appinvite_service": {
-          "other_platform_oauth_client": []
+          "other_platform_oauth_client": [
+            {
+              "client_id": "758010366466-gl3t84gee5opqg8jue4odb9g363hri2q.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
         }
       }
     }
